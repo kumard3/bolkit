@@ -126,6 +126,7 @@ import { SettingsModal } from './src/ui/SettingsModal';
 import { RecordScreen } from './src/ui/RecordScreen';
 import { Onboarding } from './src/ui/Onboarding';
 import { registerQuickActions, QA_DICTATE, QA_HISTORY } from './src/quickActions';
+import { runWhisperSelftest } from './src/selftest';
 
 const IDLE_LEVELS = Array(BAR_COUNT).fill(0.06);
 
@@ -191,6 +192,7 @@ export default function App() {
   const [appleReady, setAppleReady] = useState(appleSpeechAvailable());
   useEffect(() => {
     appleSpeechReady.then(setAppleReady);
+    runWhisperSelftest();
   }, []);
   const lastHistoryId = useRef<string | null>(null);
   const dictStart = useRef(0);

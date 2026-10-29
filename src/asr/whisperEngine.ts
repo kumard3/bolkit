@@ -1,6 +1,6 @@
 import { initWhisper, WhisperContext } from 'whisper.rn';
 import { ASREngine, ModelSpec, TranscribeRequest, TranscriptionResult } from './types';
-import { biasTerms, getDictationStyle } from './settings';
+import { getDictationStyle } from './settings';
 import { decodeLanguage, stripAnnotations } from './whisperText';
 
 function stripScheme(uri: string): string {
@@ -44,12 +44,11 @@ export class WhisperEngine implements ASREngine {
   async transcribe(req: TranscribeRequest): Promise<TranscriptionResult> {
     if (!this.ctx) throw new Error('Whisper model not loaded');
     const started = Date.now();
-    const vocab = biasTerms();
+    // No vocab prompt: on whisper.rn 0.6.0 any initial prompt collapses the output to one word
+    // ("reason,") on GPU and CPU alike, measured on the iPhone 17 Pro 2026-10-29.
     const { promise } = this.ctx.transcribe(stripScheme(req.wavPath), {
       language: decodeLanguage(this.spec, req.language, getDictationStyle()),
       translate: req.translateToEnglish ?? false,
-      // Seeds the decoder's context so names/jargon are in-distribution.
-      prompt: vocab.length ? vocab.join(', ') : undefined,
       temperature: 0,
     });
     const res = await promise;
