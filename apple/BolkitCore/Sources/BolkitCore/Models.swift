@@ -14,6 +14,7 @@ public struct Chapter: Codable, Equatable, Sendable {
   public var title: String
   public var start: Double
   public var end: Double
+  public init(title: String, start: Double, end: Double) { self.title = title; self.start = start; self.end = end }
 }
 
 public struct Meeting: Codable, Identifiable, Equatable, Sendable {
@@ -27,6 +28,8 @@ public struct Meeting: Codable, Identifiable, Equatable, Sendable {
   public var speakerNames: [String: String]?
   public var summary: String?
   public var decisions: [String]?
+  public var suggestions: [String]?
+  public var actions: [String]?
   public var chapters: [Chapter]?
   public var hasAudio: Bool
 

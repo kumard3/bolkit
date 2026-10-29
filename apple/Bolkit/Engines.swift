@@ -2,7 +2,7 @@ import AVFoundation
 import BolkitCore
 import SwiftUI
 
-enum Kind { case apple, whisper, voz, parakeet, cloud }
+enum Kind { case apple, whisper, voz, parakeet, speakers, cloud }
 
 struct ModelInfo: Identifiable {
   let id: String, title: String, note: String, kind: Kind
@@ -18,7 +18,9 @@ let catalog: [ModelInfo] = [
         file: "ggml-small.en-q5_1.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin", bytes: 190_098_681, sizeLabel: "181 MB"),
   .init(id: "voz", title: "Voz", note: "Powered by Desert Ant Labs. English, word timestamps.", kind: .voz, sizeLabel: "321 MB"),
   .init(id: "parakeet", title: "Parakeet", note: "NVIDIA Parakeet on the Neural Engine. English plus European languages.", kind: .parakeet, sizeLabel: "~460 MB"),
+  .init(id: "sortformer", title: "Speaker labels", note: "NVIDIA Sortformer on the Neural Engine. Tells up to 4 speakers apart in meetings.", kind: .speakers, sizeLabel: "~120 MB"),
   .init(id: "cloud:azure", title: "Azure Speech", note: "MAI-Transcribe-2. Needs your Azure key.", kind: .cloud, sizeLabel: "Cloud"),
+  .init(id: "cloud:azureopenai", title: "Azure OpenAI", note: "Your transcription deployment. Needs endpoint and key.", kind: .cloud, sizeLabel: "Cloud"),
   .init(id: "cloud:openai", title: "OpenAI compatible", note: "Any /audio/transcriptions endpoint. Needs your key.", kind: .cloud, sizeLabel: "Cloud"),
 ]
 
@@ -40,16 +42,19 @@ final class ModelStore {
   var failure: [String: String] = [:]
   var installedTick = 0
   let dir = URL.documentsDirectory.appendingPathComponent("models", isDirectory: true)
+  let store = Store()
 
   func installed(_ m: ModelInfo) -> Bool {
     _ = installedTick
     switch m.kind {
-    case .apple, .cloud: return true
+    case .apple: return true
+    case .cloud: return Cloud.ready(m.id, store.settings())
     case .whisper:
       let size = (try? FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent(m.file!).path)[.size] as? Int64) ?? 0
       return size == m.bytes
     case .voz: return Extra.vozInstalled()
     case .parakeet: return Extra.parakeetInstalled()
+    case .speakers: return Extra.sortformerInstalled()
     }
   }
 
@@ -63,6 +68,7 @@ final class ModelStore {
       case .whisper: try await fetch(m)
       case .voz: try await Extra.vozDownload { p in Task { @MainActor in self.progress[m.id] = p } }
       case .parakeet: try await Extra.parakeetDownload { p in Task { @MainActor in self.progress[m.id] = p } }
+      case .speakers: try await Extra.sortformerDownload { p in Task { @MainActor in self.progress[m.id] = p } }
       default: break
       }
     } catch { failure[m.id] = error.localizedDescription }
@@ -75,6 +81,7 @@ final class ModelStore {
     case .whisper: try? FileManager.default.removeItem(at: url(m))
     case .voz: Extra.vozDelete()
     case .parakeet: Extra.parakeetDelete()
+    case .speakers: Extra.sortformerDelete()
     default: break
     }
     installedTick += 1

@@ -11,6 +11,20 @@ struct ModelsView: View {
       picker("Dictation", selected: m.dictationModel) { m.dictationModel = $0 }
       picker("Meetings", selected: m.meetingModel) { m.meetingModel = $0 }
       Card {
+        let sf = modelInfo("sortformer")
+        Text("Speakers (meetings)").font(.footnote).foregroundStyle(Mono.faint)
+        HStack {
+          Row(title: sf.title, sub: m.models.failure[sf.id] ?? sf.note, trailing: m.models.installed(sf) ? sf.sizeLabel : nil)
+          if let p = m.models.progress[sf.id] {
+            Text("\(Int(p * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Mono.dim)
+          } else if m.models.installed(sf) {
+            Button { m.models.delete(sf) } label: { Image(systemName: "trash") }.foregroundStyle(Mono.faint)
+          } else {
+            Button { Task { await m.models.download(sf) } } label: { Image(systemName: "arrow.down.circle") }.foregroundStyle(.white)
+          }
+        }
+      }
+      Card {
         Text("Apple Speech language").font(.footnote).foregroundStyle(Mono.faint)
         Row(title: languages.first { $0.code == m.language }?.name ?? m.language, sub: note)
         Button { Task { await install() } } label: {
@@ -23,15 +37,15 @@ struct ModelsView: View {
   func picker(_ title: String, selected: String, set: @escaping (String) -> Void) -> some View {
     Card {
       Text(title).font(.footnote).foregroundStyle(Mono.faint)
-      ForEach(catalog) { x in
+      ForEach(catalog.filter { $0.kind != .speakers }) { x in
         let on = m.models.installed(x)
         HStack(spacing: 10) {
-          Button { if on { set(x.id) } else { Task { await m.models.download(x) } } } label: {
-            Row(title: x.title, sub: m.models.failure[x.id] ?? x.note, trailing: on ? x.sizeLabel : nil)
+          Button { if on { set(x.id) } else if x.kind == .cloud { m.tab = 4 } else { Task { await m.models.download(x) } } } label: {
+            Row(title: x.title, sub: m.models.failure[x.id] ?? x.note, trailing: on ? x.sizeLabel : x.kind == .cloud ? "Add key" : nil)
           }
           if let p = m.models.progress[x.id] {
             Text("\(Int(p * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Mono.dim)
-          } else if !on {
+          } else if !on && x.kind != .cloud {
             Button { Task { await m.models.download(x) } } label: { Image(systemName: "arrow.down.circle") }.foregroundStyle(.white)
           } else {
             if x.kind == .whisper || x.kind == .voz || x.kind == .parakeet {

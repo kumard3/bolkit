@@ -56,7 +56,7 @@ final class AppModel {
 
   func transcribe(_ file: URL, model id: String) async throws -> [Word] {
     let info = modelInfo(id)
-    guard info.kind != .apple, models.installed(info) || info.kind == .cloud else {
+    guard info.kind != .apple, models.installed(info) else {
       return try await Speech.words(file: file, locale: language, vocab: vocab)
     }
     switch info.kind {
@@ -64,6 +64,8 @@ final class AppModel {
       let samples = try Audio.samples(file)
       let url = models.url(info), lang = info.forced ?? shortLang, w = whisper
       return try await Task.detached { try w.transcribe(samples: samples, model: url, language: lang) }.value
+    case .cloud:
+      return try await Cloud.transcribe(info.id, file: file, settings: store.settings(), language: language, vocab: vocab)
     default:
       return try await Extra.transcribe(info, file: file, app: self)
     }
@@ -135,22 +137,33 @@ final class AppModel {
     guard let id = recordingID else { return }
     let dur = capture.stop()
     recordingID = nil
+    await finishMeeting(id, duration: dur)
+    openID = id
+    tab = 2
+  }
+
+  func finishMeeting(_ id: String, duration dur: Double) async {
     busy = true
     defer { busy = false }
     var turns: [Turn] = []
     do {
       let words = try await transcribe(store.audioURL(id), model: meetingModel)
-      turns = Digest.turns(from: words.map { ($0.text, $0.start, $0.end) })
+      var segs: [(start: Double, end: Double, speaker: Int)] = []
+      let sf = modelInfo("sortformer")
+      if settings.bool("diarizationEnabled", true), models.installed(sf) {
+        let samples = try Audio.samples(store.audioURL(id))
+        segs = ((try? await Engines.shared.diarize(samples)) ?? []).map { ($0.start, $0.end, $0.speaker) }
+      }
+      turns = Digest.turns(from: words, segments: segs)
     } catch { self.error = "Saved the audio, but transcription failed: \(error.localizedDescription)" }
     let text = turns.map(\.text).joined(separator: " ")
     let created = Double(id.split(separator: "-").first.flatMap { Int($0) } ?? Int(Date().timeIntervalSince1970 * 1000))
     var m = Meeting(id: id, title: Meeting.defaultTitle(Date(timeIntervalSince1970: created / 1000)), createdAt: created, durationSec: dur.rounded(), language: shortLang, transcript: text, turns: turns, hasAudio: true)
     if !text.isEmpty { m.summary = Digest.summary(text); m.decisions = Digest.decisions(text) }
     if let n = yourName.nilIfEmpty, m.turns?.isEmpty == false { m.speakerNames = ["0": n] }
+    await Brain.enrich(&m, vocab: vocab, you: yourName)
     try? store.save(m)
     reload()
-    openID = id
-    tab = 2
   }
 
   func update(_ m: Meeting) {
@@ -187,8 +200,12 @@ final class AppModel {
       out["liveText"] = await live.finish()
       out["partial"] = last.value
     } catch { out["liveError"] = error.localizedDescription }
+    for name in (UserDefaults.standard.string(forKey: "selfInstall") ?? "").split(separator: ",") {
+      let info = modelInfo(String(name))
+      if !models.installed(info) { await models.download(info); out["install_\(info.id)"] = models.failure[info.id] ?? "ok" }
+    }
     var engines: [String: Any] = [:]
-    for info in catalog where info.kind != .apple && (models.installed(info) || info.kind == .cloud) {
+    for info in catalog where ![.apple, .speakers].contains(info.kind) && models.installed(info) {
       let t = Date()
       do {
         let words = try await transcribe(wav, model: info.id)
@@ -196,6 +213,16 @@ final class AppModel {
       } catch { engines[info.id] = ["error": error.localizedDescription] }
     }
     out["engines"] = engines
+    let id = Store.newID()
+    try? FileManager.default.createDirectory(at: store.dir(id), withIntermediateDirectories: true)
+    try? FileManager.default.copyItem(at: FileManager.default.fileExists(atPath: dir.appendingPathComponent("selftest2.wav").path) ? dir.appendingPathComponent("selftest2.wav") : wav, to: store.audioURL(id))
+    let t1 = Date()
+    await finishMeeting(id, duration: 14)
+    if let m = meetings.first(where: { $0.id == id }) {
+      out["meeting"] = ["seconds": Date().timeIntervalSince(t1), "speakers": m.speakers, "turns": (m.turns ?? []).map { ["speaker": $0.speaker, "start": $0.start ?? 0, "text": $0.text] }, "summary": m.summary ?? "", "decisions": m.decisions ?? [], "suggestions": m.suggestions ?? [], "actions": m.actions ?? [], "title": m.title, "brain": Brain.available, "chapters": (m.chapters ?? []).map(\.title)]
+    }
+    store.delete(id)
+    reload()
     try? JSONSerialization.data(withJSONObject: out, options: .prettyPrinted).write(to: dir.appendingPathComponent("selftest.json"))
     print("SELFTEST", out)
   }

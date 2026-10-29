@@ -7,6 +7,12 @@ options:
 packages:
   BolkitCore:
     path: BolkitCore
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio.git
+    revision: 19600a485baa4998812e4654b70d2bab8f2c9949
+  DesertAnt:
+    url: https://github.com/Desert-Ant-Labs/desert-ant-core.git
+    exactVersion: 4.2.1
 targets:
   Bolkit:
     type: application
@@ -14,6 +20,9 @@ targets:
     sources: [Bolkit]
     dependencies:
       - package: BolkitCore
+      - package: FluidAudio
+      - package: DesertAnt
+        product: Voz
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.localvoice.native

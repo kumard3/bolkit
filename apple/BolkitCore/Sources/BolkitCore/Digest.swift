@@ -34,17 +34,61 @@ public enum Digest {
     return sentences(text).filter { s in cues.contains { s.lowercased().contains($0) } }.prefix(6).map { $0 }
   }
 
-  public static func turns(from words: [(text: String, start: Double, end: Double)], gap: Double = 1.6) -> [Turn] {
+  public static func turns(from words: [Word], segments: [(start: Double, end: Double, speaker: Int)] = [], gap: Double = 1.6) -> [Turn] {
+    func speaker(_ w: Word, _ prev: Int) -> Int {
+      var best = (overlap: 0.0, speaker: prev)
+      for s in segments {
+        let o = min(w.end, s.end) - max(w.start, s.start)
+        if o > best.overlap { best = (o, s.speaker) }
+      }
+      return best.speaker
+    }
     var out: [Turn] = []
     var last = -100.0
     for w in words {
-      if w.start - last > gap || out.isEmpty {
-        out.append(Turn(speaker: 0, text: w.text, start: w.start, end: w.end))
+      let sp = speaker(w, out.last?.speaker ?? 0)
+      if out.isEmpty || sp != out[out.count - 1].speaker || w.start - last > gap {
+        out.append(Turn(speaker: sp, text: w.text, start: w.start, end: w.end))
       } else {
         out[out.count - 1].text += " " + w.text
         out[out.count - 1].end = w.end
       }
       last = w.end
+    }
+    return out
+  }
+
+  public static func clock(_ t: Double) -> String {
+    let s = Int(t)
+    return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%02d:%02d", s / 60, s % 60)
+  }
+
+  public static func windows(_ turns: [Turn], name: (Int) -> String, limit: Int = 7000) -> [(text: String, start: Double)] {
+    var out: [(text: String, start: Double)] = []
+    var current = "", start = 0.0
+    for t in turns {
+      let line = "[\(clock(t.start ?? 0))] \(name(t.speaker)): \(t.text)"
+      if !current.isEmpty, current.count + line.count > limit { out.append((current, start)); current = "" }
+      if current.isEmpty { start = t.start ?? 0 }
+      if line.count > limit {
+        var rest = Substring(line)
+        while !rest.isEmpty { out.append((String(rest.prefix(limit)), t.start ?? 0)); rest = rest.dropFirst(limit) }
+      } else {
+        current += (current.isEmpty ? "" : "\n\n") + line
+      }
+    }
+    if !current.isEmpty { out.append((current, start)) }
+    return out
+  }
+
+  public static func sections(_ text: String) -> [String: [String]] {
+    var out: [String: [String]] = [:]
+    var key = ""
+    for raw in text.split(whereSeparator: \.isNewline) {
+      let line = raw.trimmingCharacters(in: CharacterSet(charactersIn: " *#-•\t"))
+      let low = line.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+      if ["key points", "decisions", "suggestions", "action items"].contains(low) { key = low; continue }
+      if !key.isEmpty, !line.isEmpty, !["none", "none."].contains(line.lowercased()) { out[key, default: []].append(line) }
     }
     return out
   }

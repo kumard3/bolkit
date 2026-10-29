@@ -148,12 +148,14 @@ struct MeetingDetail: View {
   @ViewBuilder func summary(_ x: Meeting) -> some View {
     Card {
       Text("Summary").font(.footnote).foregroundStyle(Mono.faint)
-      Text(x.summary ?? "No summary yet.").foregroundStyle(.white).textSelection(.enabled)
+      Text(Digest.sections(x.summary ?? "")["key points"]?.map { "• \($0)" }.joined(separator: "\n") ?? x.summary ?? "No summary yet.").foregroundStyle(.white).textSelection(.enabled)
     }
-    if let d = x.decisions, !d.isEmpty {
-      Card {
-        Text("Decisions").font(.footnote).foregroundStyle(Mono.faint)
-        ForEach(d, id: \.self) { Text("• \($0)").foregroundStyle(.white) }
+    ForEach([("Decisions", x.decisions), ("Suggestions", x.suggestions), ("Action items", x.actions)], id: \.0) { title, items in
+      if let items, !items.isEmpty {
+        Card {
+          Text(title).font(.footnote).foregroundStyle(Mono.faint)
+          ForEach(items, id: \.self) { Text("• \($0)").foregroundStyle(.white) }
+        }
       }
     }
     if let c = x.chapters, !c.isEmpty {

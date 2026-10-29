@@ -9,7 +9,7 @@ import Testing
 }
 
 @Test func turnsSplitOnPause() {
-  let t = Digest.turns(from: [("a", 0, 1), ("b", 1.1, 2), ("c", 5, 6)])
+  let t = Digest.turns(from: [Word(text: "a", start: 0, end: 1), Word(text: "b", start: 1.1, end: 2), Word(text: "c", start: 5, end: 6)])
   #expect(t.map(\.text) == ["a b", "c"])
 }
 
@@ -21,4 +21,15 @@ import Testing
   s.set("yourName", "Kumar")
   let again = Store(root: dir).settings()
   #expect(again.string("cloudBaseUrl") == "x" && again.string("yourName") == "Kumar" && again.bool("onboarded"))
+}
+
+@Test func turnsFollowSpeakers() {
+  let w = [Word(text: "hi", start: 0, end: 1), Word(text: "there", start: 1, end: 2), Word(text: "yo", start: 2.2, end: 3)]
+  let t = Digest.turns(from: w, segments: [(0, 2, 0), (2, 3.5, 1)])
+  #expect(t.map(\.speaker) == [0, 1] && t[0].text == "hi there")
+}
+
+@Test func parsesSections() {
+  let s = Digest.sections("**Key points**\n- Ship Friday\n\n**Decisions**\n- Ship Friday\n**Suggestions**\nnone\n**Action items**\n- Maria: notes [00:12]")
+  #expect(s["key points"] == ["Ship Friday"] && s["decisions"] == ["Ship Friday"] && s["suggestions"] == nil && s["action items"] == ["Maria: notes [00:12]"])
 }
