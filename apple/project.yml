@@ -13,7 +13,6 @@ settings:
     DEVELOPMENT_TEAM: Q84L632A4A
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    TARGETED_DEVICE_FAMILY: "1"
 packages:
   BolkitCore:
     path: BolkitCore
@@ -38,6 +37,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
+        TARGETED_DEVICE_FAMILY: "1"
         PRODUCT_NAME: Bolkit
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: $(APP_DISPLAY_NAME)
@@ -56,6 +56,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown]
         CFBundleURLTypes:
           - CFBundleURLSchemes: [scribe]
   BolkitKeyboard:
@@ -65,6 +66,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).ScribeKeyboard
+        TARGETED_DEVICE_FAMILY: "1"
     info:
       path: BolkitKeyboard/Info.plist
       properties:
@@ -86,6 +88,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).ScribeWidget
+        TARGETED_DEVICE_FAMILY: "1"
     info:
       path: BolkitWidget/Info.plist
       properties:
