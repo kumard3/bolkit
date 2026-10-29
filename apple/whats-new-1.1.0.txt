@@ -1,0 +1,8 @@
+Bolkit 1.1 is rebuilt from the ground up as a native iPhone app.
+
+- Record meetings with speaker labels. NVIDIA Sortformer tells up to 4 voices apart, fully on device.
+- Meeting summaries on device with Apple Intelligence: key points, decisions, action items and chapters.
+- More speech models: Voz for English meetings (powered by Desert Ant Labs), NVIDIA Parakeet for English and European languages, and Whisper tuned for Hinglish. Each is a one-time download, then it runs offline.
+- Optional cloud transcription with your own keys: Azure Speech, Azure OpenAI or any OpenAI-compatible endpoint. Keys stay in your Keychain. Off by default.
+- Fixed Record sometimes giving a one-word transcript.
+- The Bolkit keyboard and Home Screen widget are still here.

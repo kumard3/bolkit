@@ -19,6 +19,7 @@ final class AppModel {
 
   var dictText = ""
   var dictating = false
+  var copyOnFinish = false
   var busy = false
   var error: String?
   var recordingID: String?
@@ -107,6 +108,10 @@ final class AppModel {
     if autoPolish { t = polish(t) }
     dictText = t
     guard !t.isEmpty else { return }
+    if copyOnFinish {
+      copyOnFinish = false
+      UIPasteboard.general.string = t
+    }
     history.insert(HistoryItem(text: t, language: shortLang), at: 0)
     store.saveHistory(history)
   }

@@ -27,6 +27,12 @@ struct Root: View {
     }
     .toolbarBackground(Mono.bg, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
+    .onOpenURL { url in
+      guard url.host == "dictate-session" else { return }
+      m.tab = 0
+      m.copyOnFinish = true
+      if !m.dictating { Task { await m.toggleDictate() } }
+    }
     .fullScreenCover(isPresented: $onboarding) { Onboarding { onboarding = false } }
     .onAppear {
       onboarding = !m.onboarded || UserDefaults.standard.bool(forKey: "forceOnboarding")
@@ -48,7 +54,7 @@ struct HomeView: View {
         RoundMic(icon: m.dictating ? "stop.fill" : "mic.fill", active: m.dictating) { Task { await m.toggleDictate() } }
           .padding(.top, 24)
         if m.dictating { Waveform(levels: m.capture.levels) }
-        Text(m.dictating ? "Listening" : "Tap to dictate").font(.footnote).foregroundStyle(Mono.dim)
+        Text(m.dictating ? (m.copyOnFinish ? "Listening. Tap stop, then swipe back and Paste" : "Listening") : "Tap to dictate").font(.footnote).foregroundStyle(Mono.dim)
       }
       .frame(maxWidth: .infinity)
 

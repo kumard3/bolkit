@@ -4,6 +4,16 @@ options:
   deploymentTarget:
     iOS: "18.0"
   createIntermediateGroups: true
+settings:
+  base:
+    APP_BUNDLE_ID: ai.localvoice.native
+    APP_DISPLAY_NAME: Bolkit Dev
+    MARKETING_VERSION: 1.1.0
+    CURRENT_PROJECT_VERSION: 13
+    DEVELOPMENT_TEAM: Q84L632A4A
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
 packages:
   BolkitCore:
     path: BolkitCore
@@ -23,16 +33,14 @@ targets:
       - package: FluidAudio
       - package: DesertAnt
         product: Voz
+      - target: BolkitKeyboard
+      - target: BolkitWidget
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: ai.localvoice.native
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
         PRODUCT_NAME: Bolkit
-        DEVELOPMENT_TEAM: Q84L632A4A
-        CODE_SIGN_STYLE: Automatic
-        SWIFT_VERSION: "5.0"
-        TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Bolkit Dev
+        INFOPLIST_KEY_CFBundleDisplayName: $(APP_DISPLAY_NAME)
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIUserInterfaceStyle: Dark
@@ -45,3 +53,44 @@ targets:
       path: Bolkit/Info.plist
       properties:
         UIBackgroundModes: [audio]
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [scribe]
+  BolkitKeyboard:
+    type: app-extension
+    platform: iOS
+    sources: [BolkitKeyboard]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).ScribeKeyboard
+    info:
+      path: BolkitKeyboard/Info.plist
+      properties:
+        CFBundleDisplayName: Bolkit Voice
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            RequestsOpenAccess: true
+  BolkitWidget:
+    type: app-extension
+    platform: iOS
+    sources: [BolkitWidget]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).ScribeWidget
+    info:
+      path: BolkitWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Bolkit
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
