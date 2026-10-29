@@ -1,0 +1,237 @@
+import DesertAnt
+import Foundation
+import Transcript
+
+// Everything MLX-backed is behind `#if MLX`, the compilation condition SwiftPM defines for the
+// `MLX` package trait (see Package.swift). Without the trait this module still compiles
+// (`Card`, the prompt, and `parse` are portable and tested everywhere) but `Titles` has no
+// public initializer, so a consumer that forgot the trait fails at compile time.
+#if MLX
+// `HuggingFace` and `Tokenizers` are imported for the macro, not for this file's own code:
+// `#huggingFaceLoadModelContainer` expands into references to `HubClient` and `Tokenizers`.
+// Removing them as "unused" breaks the build inside a macro expansion, where the error names
+// symbols that appear nowhere in this source.
+import HuggingFace
+import MLX
+import MLXHuggingFace
+import MLXLLM
+import MLXLMCommon
+import Tokenizers
+#endif
+
+/// A title and a description for a passage of text.
+///
+/// Not a field on ``Transcript/Clip``: selection and card writing are separate stages on
+/// separate silicon, and a `card` property would be permanently nil for consumers that never
+/// call this module. Pair them with ``Titles/cards(for:)`` when you want both.
+public struct Card: Sendable, Codable, Equatable {
+    public let title: String
+    public let description: String
+
+    public init(title: String, description: String) {
+        self.title = title
+        self.description = description
+    }
+
+    /// True when the model returned neither a title nor a description. Parsing is
+    /// tolerant (see ``Titles/parse(_:)``), so an empty card is the only failure signal a
+    /// caller gets, and it should be treated as "no card" rather than as an error.
+    public var isEmpty: Bool { title.isEmpty && description.isEmpty }
+}
+
+/// Writes titles and descriptions on device.
+///
+/// **Not clip-specific.** The model was fine-tuned on transcript clips, but the task it learned
+/// is general: a transcript clip, a news paragraph, a product description and an internal email
+/// all produced accurate, specific cards on the 6-bit Granite. One slip in four (an email
+/// "moving the review from Tuesday to Thursday" was described as running "from Tuesday to
+/// Thursday"), so treat it as capable on general prose, not infallible on it.
+///
+/// Loading is expensive and generation is cheap: build one and reuse it. An `actor` because MLX
+/// state is not safe to drive from several tasks at once.
+///
+/// This type does NOT go through `InferenceSession`. It is the one model in this package that
+/// runs on MLX, for reasons recorded on ``TitleModel``.
+public actor Titles {
+
+    /// The prompt the model is fine-tuned against, byte for byte.
+    ///
+    /// The single definition is `title-training/python/student_prompt.py`, which `train.py`
+    /// imports to build every training example and which `tests/test_prompt_parity.py` compares
+    /// against this string. If they drift, that test fails.
+    ///
+    /// It says "passage" rather than "video clip" because the model is not clip-specific.
+    ///
+    /// No rules block. Rules shape the teacher's output and therefore the targets; a student
+    /// that has learned the mapping does not need them recited, and reciting them costs prompt
+    /// tokens on every call. The teacher's prompt lives in `title-training/python/gen_cards.py`.
+    static let prompt = """
+        Write a factual title (3-8 words) and a 1-2 sentence description for this passage.\
+        Be specific enough to identify this passage. No emoji, no hashtags, no hype.\
+        Write in the same language as the passage.
+
+        PASSAGE:
+        {clip}
+        """
+
+    #if MLX
+    private let model: ModelContainer
+    private let maxTokens: Int
+
+    /// GPU gate. iOS revokes GPU submission rights when an app is backgrounded, and MLX
+    /// surfaces that as an uncatchable C++ `runtime_error` from a Metal completion handler:
+    /// a crash, not an error a caller can handle. `suspend()` before entering the background
+    /// and `resume()` on return. See the note on ``suspend()`` for why this cancels rather
+    /// than pauses.
+    private var suspended = false
+    private var resumeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var inFlight: Task<String, Error>?
+
+    /// Stop submitting GPU work, now.
+    ///
+    /// Cancels the in-flight generation rather than pausing it: the token stream's producer
+    /// decodes at full speed independent of its consumer (the `AsyncStream` is unbounded), so
+    /// gating on the consumer side would not stop the GPU. Cancellation propagates through
+    /// the stream's `onTermination` into the decode loop, which checks it on every token, so
+    /// GPU work stops within about one token. The interrupted call does not fail: it retries
+    /// from scratch after ``resume()``, which is cheap because generation is bounded at
+    /// `maxTokens` and prompt processing is a fraction of decode.
+    public func suspend() {
+        guard !suspended else { return }
+        suspended = true
+        inFlight?.cancel()
+    }
+
+    /// Allow GPU work again. Interrupted and queued generations proceed.
+    public func resume() {
+        guard suspended else { return }
+        suspended = false
+        let waiters = resumeWaiters
+        resumeWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func waitWhileSuspended() async {
+        while suspended {
+            await withCheckedContinuation { resumeWaiters.append($0) }
+        }
+    }
+
+    /// - Parameters:
+    ///   - directory: an MLX model folder with the files ``TitleModel/files`` declares. Nothing is
+    ///     bundled with this package and nothing is downloaded here; point this at a folder you
+    ///     populated.
+    ///   - maxTokens: two short lines. The cap stops a degenerate run decoding forever, which
+    ///     is a real failure mode for a small instruct model given unusual input.
+    public init(directory: URL, maxTokens: Int = 96) async throws {
+        self.model = try await #huggingFaceLoadModelContainer(
+            configuration: ModelConfiguration(directory: directory))
+        self.maxTokens = maxTokens
+        licenseOnLoad(TitleModel.sdkInfo)
+    }
+
+    /// A title and description for any passage of text.
+    public func describe(_ text: String) async throws -> Card {
+        Self.parse(try await generate(
+            Self.prompt.replacingOccurrences(of: "{clip}", with: text)))
+    }
+
+    /// A card for one clip.
+    public func card(for clip: Clip) async throws -> Card {
+        try await describe(clip.text)
+    }
+
+    /// Cards for many clips, index-aligned with the input.
+    ///
+    /// Returns a parallel array rather than mutating `Clip`, so `Clips` stays unaware that this
+    /// module exists. Zip them if you want pairs.
+    ///
+    /// Sequential on purpose. Decode is already GPU-bound, so overlapping generations contend
+    /// for the same device rather than adding throughput, and on a phone it adds thermal
+    /// pressure that shows up as throttling partway through a long video.
+    public func cards(for clips: [Clip]) async throws -> [Card] {
+        var out: [Card] = []
+        out.reserveCapacity(clips.count)
+        for clip in clips {
+            out.append(try await card(for: clip))
+        }
+        return out
+    }
+
+    private func generate(_ prompt: String) async throws -> String {
+        while true {
+            await waitWhileSuspended()
+            try Task.checkCancellation()
+
+            // Unstructured so `suspend()` can cancel it without cancelling the caller.
+            // Inherits this actor's isolation, so `decode` stays serialized.
+            let attempt = Task { try await self.decode(prompt) }
+            inFlight = attempt
+            defer { inFlight = nil }
+
+            do {
+                return try await withTaskCancellationHandler {
+                    try await attempt.value
+                } onCancel: {
+                    attempt.cancel()
+                }
+            } catch is CancellationError {
+                // Suspension cancelled it: wait out the background stint and retry.
+                // Anything else means the caller was cancelled.
+                guard suspended else { throw CancellationError() }
+            }
+        }
+    }
+
+    private func decode(_ prompt: String) async throws -> String {
+        try await model.perform { context in
+            let input = try await context.processor.prepare(
+                input: UserInput(messages: [["role": "user", "content": prompt]]))
+            // The AsyncStream `generate`: the callback variants are deprecated.
+            // `GenerateParameters.maxTokens` stops the iterator itself.
+            var text = ""
+            let stream = try MLXLMCommon.generate(
+                input: input,
+                parameters: GenerateParameters(
+                    maxTokens: self.maxTokens,
+                    temperature: 0.0    // deterministic cards
+                ),
+                context: context
+            )
+            for await generation in stream {
+                if case let .chunk(chunk) = generation {
+                    text += chunk
+                }
+            }
+            // A cancelled run ends the stream early with partial text; that is not a card.
+            try Task.checkCancellation()
+            return text
+        }
+    }
+    #endif
+
+    /// Pull TITLE/DESC out of the reply.
+    ///
+    /// Tolerant by design: a card model that drifts off format should degrade to a usable title
+    /// rather than throw, because the clip itself is still good and selection is what ships.
+    /// `DESC` and `DESCRIPTION` are both accepted: the training data uses `DESC`, but
+    /// base-model habits leak the longer spelling through.
+    static func parse(_ raw: String) -> Card {
+        var title = "", description = ""
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let upper = trimmed.uppercased()
+            if upper.hasPrefix("TITLE:") {
+                title = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            } else if upper.hasPrefix("DESCRIPTION:") {
+                description = String(trimmed.dropFirst(12)).trimmingCharacters(in: .whitespaces)
+            } else if upper.hasPrefix("DESC:") {
+                description = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            } else if title.isEmpty && !trimmed.isEmpty {
+                // No label at all: take the first real line as the title rather than nothing.
+                title = trimmed
+            }
+        }
+        return Card(title: title, description: description)
+    }
+}

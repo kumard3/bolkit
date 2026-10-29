@@ -1,0 +1,248 @@
+// FIPS 180-4 SHA-256. Where the OS ships one, the public `SHA256` delegates to
+// it: CryptoKit on Apple platforms, CNG (bcrypt) on Windows. Those are
+// precompiled, so hashing runs at hardware speed even in a Debug build, where
+// the portable loop below manages about 4 MB/s and verifying a large cached
+// model takes minutes. `SoftwareSHA256` is the pure-Swift fallback (no
+// Foundation, no swift-crypto/BoringSSL) for Linux, Android, and wasm.
+
+#if canImport(CryptoKit)
+import CryptoKit
+#elseif os(Windows)
+import CBCrypt
+import WinSDK
+#endif
+
+struct SoftwareSHA256 {
+    private static let k: [UInt32] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ]
+
+    private var h: (UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32) = (
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19)
+    private var pending = [UInt8]()   // buffered bytes not yet a full 64-byte block
+    private var w = [UInt32](repeating: 0, count: 64)  // reused message schedule (no per-block alloc)
+    private var totalBytes: UInt64 = 0
+
+    init() { pending.reserveCapacity(64) }
+
+    /// Feed more bytes. Call any number of times before `finalize()`.
+    /// Processes 64-byte blocks straight from contiguous storage; only a
+    /// sub-block remainder is copied, so hashing large files is fast.
+    mutating func update<C: Collection>(_ bytes: C) where C.Element == UInt8 {
+        if bytes.withContiguousStorageIfAvailable({ update(buffer: $0) }) != nil { return }
+        let contiguous = Array(bytes)  // rare: non-contiguous collection
+        contiguous.withUnsafeBufferPointer { update(buffer: $0) }
+    }
+
+    mutating func update(_ bytes: [UInt8]) { bytes.withUnsafeBufferPointer { update(buffer: $0) } }
+    mutating func update(_ bytes: ArraySlice<UInt8>) { bytes.withUnsafeBufferPointer { update(buffer: $0) } }
+
+    private mutating func update(buffer buf: UnsafeBufferPointer<UInt8>) {
+        guard let base = buf.baseAddress, buf.count > 0 else { return }
+        let count = buf.count
+        totalBytes &+= UInt64(count)
+        var offset = 0
+        if !pending.isEmpty {
+            let take = min(64 - pending.count, count)
+            pending.append(contentsOf: UnsafeBufferPointer(start: base, count: take))
+            offset = take
+            if pending.count == 64 {
+                pending.withUnsafeBufferPointer { processBlock($0.baseAddress!) }
+                pending.removeAll(keepingCapacity: true)
+            }
+        }
+        while offset + 64 <= count {
+            processBlock(base + offset)
+            offset += 64
+        }
+        if offset < count {
+            pending.append(contentsOf: UnsafeBufferPointer(start: base + offset, count: count - offset))
+        }
+    }
+
+    /// Finish and return the 32-byte digest. The value is consumed.
+    mutating func finalize() -> [UInt8] {
+        let bitLen = totalBytes &* 8
+        pending.append(0x80)
+        if pending.count > 56 {
+            while pending.count < 64 { pending.append(0) }
+            pending.withUnsafeBufferPointer { processBlock($0.baseAddress!) }
+            pending.removeAll(keepingCapacity: true)
+        }
+        while pending.count < 56 { pending.append(0) }
+        for shift in stride(from: 56, through: 0, by: -8) {
+            pending.append(UInt8(truncatingIfNeeded: bitLen >> UInt64(shift)))
+        }
+        pending.withUnsafeBufferPointer { processBlock($0.baseAddress!) }
+
+        var out = [UInt8](); out.reserveCapacity(32)
+        for v in [h.0, h.1, h.2, h.3, h.4, h.5, h.6, h.7] {
+            out.append(UInt8(truncatingIfNeeded: v >> 24))
+            out.append(UInt8(truncatingIfNeeded: v >> 16))
+            out.append(UInt8(truncatingIfNeeded: v >> 8))
+            out.append(UInt8(truncatingIfNeeded: v))
+        }
+        return out
+    }
+
+    private mutating func processBlock(_ b: UnsafePointer<UInt8>) {
+        for i in 0..<16 {
+            let j = i * 4
+            w[i] = UInt32(b[j]) << 24 | UInt32(b[j + 1]) << 16 | UInt32(b[j + 2]) << 8 | UInt32(b[j + 3])
+        }
+        for i in 16..<64 {
+            let s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3)
+            let s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10)
+            w[i] = w[i - 16] &+ s0 &+ w[i - 7] &+ s1
+        }
+        var (a, b2, c, d, e, f, g, hh) = h
+        for i in 0..<64 {
+            let bigS1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
+            let ch = (e & f) ^ (~e & g)
+            let t1 = hh &+ bigS1 &+ ch &+ Self.k[i] &+ w[i]
+            let bigS0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+            let maj = (a & b2) ^ (a & c) ^ (b2 & c)
+            let t2 = bigS0 &+ maj
+            hh = g; g = f; f = e; e = d &+ t1; d = c; c = b2; b2 = a; a = t1 &+ t2
+        }
+        h = (h.0 &+ a, h.1 &+ b2, h.2 &+ c, h.3 &+ d, h.4 &+ e, h.5 &+ f, h.6 &+ g, h.7 &+ hh)
+    }
+
+    @inline(__always)
+    private func rotr(_ x: UInt32, _ n: UInt32) -> UInt32 { (x >> n) | (x << (32 - n)) }
+}
+
+#if os(Windows)
+/// SHA-256 from Windows CNG, with the same surface as `SoftwareSHA256`.
+struct WindowsSHA256 {
+    /// Owns the CNG hash object. A struct copy shares it until one side
+    /// writes, then `BCryptDuplicateHash` splits them, so a copied hasher
+    /// behaves as a value the way CryptoKit's and `SoftwareSHA256` do.
+    private final class State {
+        var handle: BCRYPT_HASH_HANDLE?
+
+        init() {
+            // The SHA-256 pseudo-handle (Windows 10+) needs no algorithm
+            // provider to open or close and may be shared across threads.
+            // bcrypt.h spells it as a macro Swift cannot import.
+            let sha256 = BCRYPT_ALG_HANDLE(bitPattern: 0x41)
+            let status = BCryptCreateHash(sha256, &handle, nil, 0, nil, 0, 0)
+            precondition(status >= 0, "BCryptCreateHash failed: \(status)")
+        }
+
+        init(copying other: State) {
+            let status = BCryptDuplicateHash(other.handle, &handle, nil, 0, 0)
+            precondition(status >= 0, "BCryptDuplicateHash failed: \(status)")
+        }
+
+        deinit { BCryptDestroyHash(handle) }
+    }
+
+    private var state = State()
+
+    init() {}
+
+    mutating func update<C: Collection>(_ bytes: C) where C.Element == UInt8 {
+        if bytes.withContiguousStorageIfAvailable({ update(buffer: UnsafeRawBufferPointer($0)) }) != nil { return }
+        let contiguous = Array(bytes)  // rare: non-contiguous collection
+        contiguous.withUnsafeBytes { update(buffer: $0) }
+    }
+
+    mutating func update(_ bytes: [UInt8]) { bytes.withUnsafeBytes { update(buffer: $0) } }
+    mutating func update(_ bytes: ArraySlice<UInt8>) { bytes.withUnsafeBytes { update(buffer: $0) } }
+
+    private mutating func update(buffer: UnsafeRawBufferPointer) {
+        guard let base = buffer.baseAddress, buffer.count > 0 else { return }
+        if !isKnownUniquelyReferenced(&state) { state = State(copying: state) }
+        // The length is a ULONG, so a buffer past 4 GB goes in pieces.
+        var offset = 0
+        while offset < buffer.count {
+            let n = min(buffer.count - offset, 1 << 30)
+            let input = UnsafeMutablePointer(mutating: base.advanced(by: offset).assumingMemoryBound(to: UInt8.self))
+            let status = BCryptHashData(state.handle, input, ULONG(n), 0)
+            precondition(status >= 0, "BCryptHashData failed: \(status)")
+            offset += n
+        }
+    }
+
+    /// Finish and return the 32-byte digest. The value is consumed.
+    mutating func finalize() -> [UInt8] {
+        if !isKnownUniquelyReferenced(&state) { state = State(copying: state) }
+        var out = [UInt8](repeating: 0, count: 32)
+        let status = BCryptFinishHash(state.handle, &out, 32, 0)
+        precondition(status >= 0, "BCryptFinishHash failed: \(status)")
+        return out
+    }
+}
+#endif
+
+/// Streaming SHA-256. Backed by CryptoKit on Apple platforms, CNG on Windows,
+/// and `SoftwareSHA256` everywhere else; all produce the same digest.
+public struct SHA256 {
+    #if canImport(CryptoKit)
+    private var impl = CryptoKit.SHA256()
+    #elseif os(Windows)
+    private var impl = WindowsSHA256()
+    #else
+    private var impl = SoftwareSHA256()
+    #endif
+
+    public init() {}
+
+    /// Feed more bytes. Call any number of times before `finalize()`.
+    public mutating func update<C: Collection>(_ bytes: C) where C.Element == UInt8 {
+        #if canImport(CryptoKit)
+        if bytes.withContiguousStorageIfAvailable({ impl.update(bufferPointer: UnsafeRawBufferPointer($0)) }) != nil { return }
+        impl.update(data: Array(bytes))  // rare: non-contiguous collection
+        #else
+        impl.update(bytes)
+        #endif
+    }
+
+    public mutating func update(_ bytes: [UInt8]) { update(bytes[...]) }
+    public mutating func update(_ bytes: ArraySlice<UInt8>) {
+        #if canImport(CryptoKit)
+        bytes.withUnsafeBufferPointer { impl.update(bufferPointer: UnsafeRawBufferPointer($0)) }
+        #else
+        impl.update(bytes)
+        #endif
+    }
+
+    /// Finish and return the 32-byte digest. The value is consumed.
+    public mutating func finalize() -> [UInt8] {
+        #if canImport(CryptoKit)
+        return Array(impl.finalize())
+        #else
+        return impl.finalize()
+        #endif
+    }
+
+    /// The 32-byte SHA-256 digest of `bytes`.
+    public static func digest<C: Collection>(_ bytes: C) -> [UInt8] where C.Element == UInt8 {
+        var s = SHA256(); s.update(bytes); return s.finalize()
+    }
+
+    /// Lowercase hex of a digest (matches Hugging Face's LFS/etag format).
+    public static func hex(_ digest: [UInt8]) -> String {
+        let d = Array("0123456789abcdef".unicodeScalars)
+        var s = ""
+        s.unicodeScalars.reserveCapacity(digest.count * 2)
+        for b in digest {
+            s.unicodeScalars.append(d[Int(b >> 4)])
+            s.unicodeScalars.append(d[Int(b & 0xf)])
+        }
+        return s
+    }
+
+    /// Lowercase hex SHA-256 of `bytes` in one call.
+    public static func hexDigest<C: Collection>(_ bytes: C) -> String where C.Element == UInt8 {
+        hex(digest(bytes))
+    }
+}

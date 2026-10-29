@@ -1,0 +1,71 @@
+import DesertAnt
+
+/// Ready inference sessions for the enhancement model. A pool (one per worker)
+/// lets the chunk loop use multiple cores on native platforms; usually one.
+///
+/// The entry point for custom deployments; the public Swift API loads the model itself.
+@_spi(ClearBindings)
+public struct ModelAssets: Sendable {
+    let sessions: [any InferenceSession]
+    /// Which published variant these sessions run, reported on `Result`. Nil
+    /// when the artifact is not a published variant (a custom export, or a
+    /// wasm host that compiled the model itself).
+    let variant: ModelVariant?
+    /// The repo revision the sessions' artifact was resolved from, reported on
+    /// `Result`. Nil for a local `modelPath`, explicit assets, or a wasm host
+    /// (nothing was downloaded, so no revision applies).
+    let revision: String?
+    /// Which runtime opened the artifact, reported on `Result`. Nil when only
+    /// the host knows (a wasm session).
+    let runtime: ModelRuntime?
+
+    init(sessions: [any InferenceSession], variant: ModelVariant? = nil, revision: String? = nil,
+         runtime: ModelRuntime? = nil) {
+        self.sessions = sessions
+        self.variant = variant
+        self.revision = revision
+        self.runtime = runtime
+    }
+
+    /// Bindings entry point: build from an already-constructed session (e.g. the
+    /// wasm host's `JSInferenceSession`), whose variant only the host knows.
+    @_spi(ClearBindings)
+    public init(session: any InferenceSession, variant: ModelVariant? = nil) {
+        self.init(sessions: [session], variant: variant)
+    }
+
+    /// Sessions over an artifact already on disk. The variant is read off the
+    /// file name, so a pre-downloaded artifact still identifies itself on
+    /// `Result`.
+    init(modelPath: String, revision: String? = nil,
+         computeUnits: ComputeUnits = .all, concurrency: Int = 1) throws {
+        self.init(
+            sessions: try (0..<max(1, concurrency)).map { _ in
+                try inferenceSession(modelPath: modelPath, computeUnits: computeUnits, sdk: ClearModel.sdkInfo)
+            },
+            variant: ModelVariant.inferred(fromPath: modelPath),
+            revision: revision,
+            runtime: ModelRuntime.inferred(fromPath: modelPath))
+    }
+
+    /// Build from a resolved model directory: one session per worker over this
+    /// platform's artifact.
+    static func clear(files: StoredModel, variant: ModelVariant, revision: String? = nil,
+                      runtime: ModelRuntime = .platformDefault,
+                      computeUnits: ComputeUnits, concurrency: Int) async throws -> ModelAssets {
+        var sessions: [any InferenceSession] = []
+        for _ in 0..<max(1, concurrency) {
+            sessions.append(try await files.inferenceSession(
+                model: variant.artifact(for: runtime),
+                computeUnits: computeUnits, sdk: ClearModel.sdkInfo))
+        }
+        return ModelAssets(sessions: sessions, variant: variant, revision: revision, runtime: runtime)
+    }
+}
+
+public extension Clear {
+    /// The published model repository.
+    static var modelRepo: String { ClearModel.repo }
+    /// The model revision this SDK is built against (pinned; not configurable).
+    static var modelRevision: String { ClearModel.revision }
+}

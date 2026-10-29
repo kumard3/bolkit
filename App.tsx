@@ -214,7 +214,7 @@ export default function App() {
     const fallback =
       language === 'en' ? 'whisper:whisper-small-en-q5' : 'whisper:whisper-small';
     return catalogModelById(fallback) ?? null;
-  }, [selected, selectedModelId, language, appleReady]);
+  }, [selected, selectedModelId, language, appleReady, getRecordModelId()]);
   const langLabel = SUPPORTED_LANGUAGES.find((l) => l.code === language)?.label ?? language;
   const active = recognizing || recording || nativeRec || modelLive;
   const liveDisplay = translateTarget && liveXlate ? liveXlate : transcript;

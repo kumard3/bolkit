@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Apple requires a privacy manifest from any SDK that collects data or calls a
+	  "required reason" API. Licensing (the `Usage` target) does both, and every
+	  model links it through DesertAnt. When a model loads without an activated
+	  license for the month, it sends a generated install identifier to request
+	  and activate one, and it persists that identifier and the license in
+	  UserDefaults. Without this file, apps embedding the SDK can be rejected at
+	  App Store review.
+
+	  No model input or output is ever sent: no text, audio, or results.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<!-- A v4 UUID generated on device, not IDFA/IDFV and not derived from
+			     anything about the user or the hardware. -->
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<!-- CA92.1: access to data stored by this app or its containing app
+			     group. Licensing reads and writes only its own
+			     `ai.desertant.usage.deviceId` and `ai.desertant.license.*` keys. -->
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

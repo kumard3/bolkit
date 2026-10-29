@@ -1,0 +1,86 @@
+# Every build, test, and publish step in this repo is a mise task, so CI runs
+# exactly what you run locally. The tasks themselves live in mise-tasks/ as
+# ordinary shell scripts (`mise tasks` lists them, `mise tasks info <name>` shows
+# one), sharing Tools/dal.sh.
+#
+#   mise run test:swift [model]  the suite on this host (macOS: Core ML, else LiteRT)
+#   mise run test:ios            the suite on an iOS Simulator
+#   mise run test:wasi           the suite on wasm32-unknown-wasi under Node
+#   mise run test:android        the on-device suites (needs an emulator/device)
+#   mise run test:js             the @desert-ant-labs/core unit tests
+#   mise run test:node           each model's npm package against its native core
+#   mise run test:node-old-glibc the linux-x64 tarballs on Ubuntu 20.04 (docker)
+#   mise run test:browser        each model's browser path in headless Chromium
+#   mise run test:bundles        every npm package through the real bundlers
+#   mise run check:types         the shipped .d.ts files, and the declared wasm ABI
+#   mise run check:swift-floor   the package builds on the Swift the README promises
+#
+#   mise run build:swift [model] Swift targets, all at once or one model
+#   mise run build:wasm  [model] the browser core -> packages/<model>-node/dist
+#   mise run build:node-native   the server-side native core, for this host
+#   mise run build:node-native-linux  the Linux cores in the release's image (docker)
+#   mise run build:android       ai.desertant:core plus every model AAR
+#
+# Model arguments accept a model name or `all` (the default). The model list is
+# never written down: it is Sources/<Product>/Catalog.swift, and what a model
+# ships is whether packages/<model>-node and packages/<model>-kotlin exist.
+#
+# Releasing is one tag. `mise run set-version X.Y.Z`, commit, push `vX.Y.Z`, and
+# .github/workflows/release.yml publishes everything at that version: the GitHub
+# Release (which is the SwiftPM release), ai.desertant:* on Maven Central, and
+# @desert-ant-labs/* on npm. VERSION is the single source of that number.
+#
+# Build hosts. macOS and Linux run everything. A Windows host is a first-class
+# but partial lane: `mise run build:swift` builds every target natively against
+# the LiteRT runtime that Tools/dal.sh vendors out of the win_amd64 wheel, and
+# the import library it needs is generated from the DLL's export table with the
+# llvm-readobj and llvm-lib that ship in the Swift toolchain, so no MSVC
+# developer prompt is involved. The other three skip with a reason: there is no
+# win32-x64 npm native to stage, the Android cross-compile has no unattended
+# Windows toolchain install, and the wasm build needs symbolic links (turn on
+# Developer Mode) plus a Swift release that has a published wasm SDK. `mise run
+# build` stays green on all three hosts and builds what each one can.
+#
+# `mise run test` on Windows runs every check and suite but test:wasi and
+# test:browser, which skip for the same wasm reasons. test:swift runs debug
+# there, because release links no tests on Windows (the task explains), and it
+# fails outright on a zero-discovery run rather than calling it a pass.
+#
+# Toolchains differ per task on purpose. test:swift and test:ios use the full
+# Xcode toolchain (Apple frameworks, Core ML), so they pin no mise `swift`. The
+# wasm and Android tasks pin a swift.org toolchain, because they need its clang
+# and a matching cross-compilation SDK, which only exist for released versions.
+# Each toolchain gets its own SwiftPM scratch directory (.build-host,
+# .build-android for the snapshot natives, .build-androidtest for the on-device
+# harness, .build for wasm) so their artifacts never collide.
+
+[env]
+# Non-empty also vendors the LiteRT GPU accelerator sibling on Linux.
+DAL_GPU = ""
+# Our own suites run on networked CI, so every model load in them sends its
+# license requests to a port nothing listens on instead of the license server.
+DAL_LICENSE_ENDPOINT = "http://127.0.0.1:9/api/v1"
+
+[tasks.build]
+description = "Build every artifact this host can build"
+depends = ["build:swift", "build:wasm", "build:node-native", "build:android"]
+
+[tasks.test]
+description = "Run every check and test suite that needs no device or simulator"
+depends = [
+    "check:version",
+    "check:commits",
+    "check:npm-repo",
+    "check:manifest",
+    "check:links",
+    "check:docs",
+    "check:isolation",
+    "check:types",
+    "check:swift-floor",
+    "test:swift",
+    "test:wasi",
+    "test:js",
+    "test:node",
+    "test:browser",
+    "test:bundles",
+]

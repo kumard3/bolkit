@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#MISE description="Build the package with the oldest Swift the README promises"
+#MISE dir="{{config_root}}"
+#MISE tools={swift={version="6.2.1", os=["linux"]}}
+source "$MISE_PROJECT_ROOT/Tools/dal.sh"
+
+# The README promises a minimum Swift; this builds on exactly that toolchain,
+# because newer syntax in code every consumer parses (`nonisolated(unsafe)` is
+# 5.10, typed throws 6.0) fails a consumer's build on an older one. Same idea as
+# pinning the Linux jobs to ubuntu-22.04 for glibc and the darwin native to
+# macos-14: build where you promise, not where it is easy.
+#
+# What it covers: every file in the package is parsed here, including the
+# `#if canImport(CoreML)` and `#if os(Android)` branches, because Swift parses
+# inactive conditional blocks. What it does not cover: type-checking the Apple-only branches, which
+# needs a Mac; the `apple` job builds those, on a newer Xcode.
+floor=$(grep -oE 'version="[0-9.]+"' "$MISE_PROJECT_ROOT/mise-tasks/check/swift-floor" | head -1 | grep -oE '[0-9.]+')
+claimed=$(grep -oE 'Swift [0-9]+\.[0-9]+\+' "$MISE_PROJECT_ROOT/README.md" | head -1 | grep -oE '[0-9]+\.[0-9]+')
+
+# The task's pinned toolchain and the README have to agree, or this proves the
+# wrong thing quietly.
+case "$floor" in
+    "$claimed"*) ;;
+    *)
+        echo "error: this task builds with Swift $floor but README.md promises $claimed" >&2
+        exit 1
+        ;;
+esac
+
+# The pin above is scoped os=["linux"], and mise ships no Swift for Windows at
+# all, so a Windows host would build this with whatever toolchain is on PATH and
+# report "ok: builds on its advertised minimum" about a compiler that is not the
+# minimum. Refusing to prove the wrong thing is the whole point of the check.
+if [ "$(dal_host_os)" = windows ]; then
+    echo "skip: mise cannot pin Swift $floor on Windows, and this check is only"
+    echo "      meaningful on the toolchain it names. Run it on Linux or in CI."
+    exit 0
+fi
+
+# The dynamic products link LiteRT, so vendor it exactly as build:swift does -
+# a check that skipped linking would miss anything the linker only sees.
+dal_vendor_litert
+eval "$(dal_litert_link_flags)"
+
+echo "== building with Swift $(swift --version | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1), the floor README.md promises =="
+swift build --scratch-path .build-floor ${litert_flags[@]+"${litert_flags[@]}"}
+echo "ok: the package builds on its advertised minimum Swift"

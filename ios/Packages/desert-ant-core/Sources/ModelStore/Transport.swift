@@ -1,0 +1,115 @@
+// The two per-platform seams (Foundation-free protocols): HTTP transport and
+// filesystem. Apple/Linux back them with URLSession/FileManager
+// (FoundationBackend.swift); Android and wasm back them with the host
+// (java.net / JS fetch, POSIX / node fs). URLs and paths are plain strings so
+// nothing Foundation crosses the seam.
+
+/// One file in a repo, from the Hub tree listing.
+public struct RemoteEntry: Sendable, Equatable {
+    /// Repo-relative path.
+    public let path: String
+    /// Size in bytes.
+    public let size: Int64
+    /// Content SHA-256 for LFS files (the large weights); `nil` for small
+    /// git-tracked files, whose hash is computed on download instead.
+    public let sha256: String?
+
+    public init(path: String, size: Int64, sha256: String?) {
+        self.path = path; self.size = size; self.sha256 = sha256
+    }
+}
+
+/// HTTP seam. `tree` lists a repo's files (Hub tree API: path + size + LFS
+/// sha256, folders included) so one call resolves folders and supplies
+/// verification hashes; `download` streams a file, reporting cumulative bytes.
+public protocol ModelTransport: Sendable {
+    func tree(_ url: String) async throws -> [RemoteEntry]
+    /// Tag names published for a repo (the Hub refs API). Only ranged
+    /// ``RevisionRequirement`` resolution calls this; backends without it
+    /// throw, and resolution falls back to the downloaded cache.
+    func tags(_ url: String) async throws -> [String]
+    func download(_ url: String, to destinationPath: String, onBytes: @escaping @Sendable (Int64) -> Void) async throws
+    /// Called once when the store stops downloading a model, on success and on
+    /// failure alike. A stateless transport ignores it; one that keeps
+    /// connections alive across a model's files (the Xet transport) releases
+    /// them here, so nothing outlives the download it was opened for.
+    func finishDownloads() async
+}
+
+public extension ModelTransport {
+    /// Default for backends without a refs call (Android host bridge, wasm):
+    /// ranged resolution then relies on its cache fallback.
+    func tags(_ url: String) async throws -> [String] {
+        throw ModelStoreError.io("tag listing not supported by this transport")
+    }
+
+    /// Most transports hold nothing between files.
+    func finishDownloads() async {}
+}
+
+/// Filesystem seam: the small set of operations the store needs. `move` must be
+/// atomic on the same volume (rename), so a crash never leaves a half file at a
+/// final path.
+public protocol FileSystem: Sendable {
+    func exists(_ path: String) -> Bool
+    func size(_ path: String) -> Int64?
+    func read(_ path: String) throws -> [UInt8]
+    func write(_ path: String, _ bytes: [UInt8]) throws
+    func makeDirectory(_ path: String) throws           // mkdir -p
+    func move(_ from: String, to: String) throws        // atomic rename
+    func remove(_ path: String)                         // best-effort
+    /// Default cache root when a model gives no `cacheDirectory`.
+    func defaultCacheRoot() -> String
+    /// Names of the entries directly under `path` (not recursive). A missing
+    /// or unreadable directory is `[]`.
+    func listDirectory(_ path: String) -> [String]
+    /// Size and SHA256 of a file without holding it in memory.
+    ///
+    /// Reading a file whole to hash it costs the size of the largest file twice
+    /// over (the `Data` and the `[UInt8]` copy): checking Voz's 449 MB would
+    /// take 914 MB against the 91 MB running it needs, on every launch.
+    func digest(_ path: String) throws -> (size: Int64, sha256: String)
+}
+
+public extension FileSystem {
+    /// Backends that cannot stream fall back to the whole-file read.
+    func digest(_ path: String) throws -> (size: Int64, sha256: String) {
+        let bytes = try read(path)
+        return (Int64(bytes.count), SHA256.hexDigest(bytes))
+    }
+}
+
+public extension FileSystem {
+    /// Backends without directory enumeration (the wasm in-memory store) list
+    /// nothing rather than failing to conform.
+    func listDirectory(_ path: String) -> [String] { [] }
+}
+
+public enum ModelStoreError: Error, CustomStringConvertible {
+    /// The repo, revision, or requested paths are empty or unsafe.
+    case invalidSpec
+    /// The remote returned an invalid or unsafe entry.
+    case invalidResponse(String)
+    /// No file manifest was declared for the current platform.
+    case unsupportedPlatform(String)
+    /// A required file is absent from a user-supplied model directory.
+    case localFileMissing(String)
+    /// A requested file or folder is not in the repo at that revision.
+    case notInRepo(String)
+    /// A download completed but failed its size/hash integrity check.
+    case integrityCheckFailed(String)
+    /// A transport/HTTP or filesystem failure.
+    case io(String)
+
+    public var description: String {
+        switch self {
+        case .invalidSpec: "invalid model specification"
+        case let .invalidResponse(message): message
+        case let .unsupportedPlatform(platform): "model does not support \(platform)"
+        case let .localFileMissing(path): "required local model file is missing: \(path)"
+        case let .notInRepo(f): "\(f) is not in the repo at that revision"
+        case let .integrityCheckFailed(f): "integrity check failed for \(f)"
+        case let .io(m): m
+        }
+    }
+}

@@ -1,0 +1,211 @@
+// The shell every model SDK wraps, so an SDK keeps only its public API and how a
+// resolved directory becomes its runtime. Keeping it shared also means no SDK can
+// drop the `cacheRoot` initializer, which silently breaks Android and Node, where
+// the platform has no cache base of its own.
+//
+//     public final class Emo: @unchecked Sendable {
+//         private let model: LoadedModel<Model>
+//         public convenience init(directory: String? = nil) {
+//             self.init(directory: directory, cacheRoot: nil)
+//         }
+//         public init(directory: String?, cacheRoot: String?) {
+//             model = LoadedModel(EmoModel.self, directory: directory, cacheRoot: cacheRoot) {
+//                 try Model(assets: await .emo(files: $0))
+//             }
+//         }
+//         public func suggestions(...) async throws -> [EmoSuggestion] {
+//             try await model.value().suggestions(...)
+//         }
+//     }
+
+import Foundation
+import ModelStore
+import PlatformSupport
+
+/// Which stage a model load is in. `downloading` runs to completion before
+/// `preparing` starts, and the fraction resets at the transition.
+public enum ModelLoadPhase: Sendable, Equatable {
+    /// Fetching (or verifying) the model files; fraction is bytes-based.
+    /// Reports 1 immediately when everything is already cached.
+    case downloading
+    /// Building the runtime from the resolved files. Coarse: most backends
+    /// report only 0 and 1 (Core ML compilation exposes no progress).
+    case preparing
+}
+
+/// A phase-aware model load report: which ``ModelLoadPhase`` and how far into
+/// it (`0...1`).
+public struct ModelLoadProgress: Sendable, Equatable {
+    public let phase: ModelLoadPhase
+    public let fraction: Double
+    public init(phase: ModelLoadPhase, fraction: Double) {
+        self.phase = phase
+        self.fraction = fraction
+    }
+}
+
+/// A model SDK's loaded runtime: `StoredModel` is the files on disk, this is the
+/// thing built from them. Construction starts nothing; the first ``value()`` or
+/// ``download(progress:)`` resolves the files (adopting `directory`, else
+/// downloading into it or into the managed cache) and builds the runtime once,
+/// sharing that single load with every concurrent caller. A failed load is not
+/// cached, so a later call retries.
+public final class LoadedModel<Runtime: Sendable>: @unchecked Sendable {
+    private let loader: LazyLoader<Runtime>
+    private let availability: @Sendable () -> Bool
+
+    /// Load from the model's own files.
+    ///
+    /// - Parameters:
+    ///   - declaration: the model's catalog entry, which supplies the repo,
+    ///     pinned revision, and this platform's file list.
+    ///   - directory: where the model lives. Files already there are adopted and
+    ///     used offline; otherwise the model is downloaded into it. `nil` uses
+    ///     the managed per-model/revision cache.
+    ///   - cacheRoot: the platform base the managed cache lives under (the app
+    ///     cache dir on Android, `~/.cache` on Node). `nil` on Apple/Linux, where
+    ///     the platform provides one.
+    ///   - build: turn the resolved files into the runtime.
+    public convenience init<Declaration: ModelDeclaration>(
+        _ declaration: Declaration.Type,
+        directory: String? = nil,
+        cacheRoot: String? = nil,
+        build: @escaping @Sendable (StoredModel) async throws -> Runtime
+    ) {
+        self.init(Declaration.distribution, directory: directory, cacheRoot: cacheRoot, build: build)
+    }
+
+    /// Load from an explicit distribution, for a model that publishes more than
+    /// one artifact set under one catalog entry (clear's studio/natural variants).
+    /// Passing a variant's own slice of the repo means choosing one never
+    /// downloads the other.
+    public convenience init(
+        _ distribution: ModelDistribution,
+        directory: String? = nil,
+        cacheRoot: String? = nil,
+        build: @escaping @Sendable (StoredModel) async throws -> Runtime
+    ) {
+        self.init(distribution, directory: directory, cacheRoot: cacheRoot) { files, _ in
+            try await build(files)
+        }
+    }
+
+    /// Like the init above, but `build` also gets the distribution the files came from. After a
+    /// fallback that is the platform default, so ask it, not the one passed in, which runtime to open.
+    public init(
+        _ distribution: ModelDistribution,
+        directory: String? = nil,
+        cacheRoot: String? = nil,
+        build: @escaping @Sendable (StoredModel, ModelDistribution) async throws -> Runtime
+    ) {
+        // The loader's Double carries both phases: [0, 0.5) is the download
+        // fraction (halved), [0.5, 1] is preparing/build. `decode` splits them back.
+        loader = LazyLoader { progress in
+            try await Self.load(distribution, directory: directory, cacheRoot: cacheRoot,
+                                progress: progress, build: build)
+        }
+        availability = { distribution.isAvailable(cacheDirectory: directory, cacheRoot: cacheRoot) }
+    }
+
+    /// Load from a distribution that is itself resolved asynchronously (a
+    /// ranged ``RevisionRequirement``, where the concrete revision comes from
+    /// the Hub's tags at load time). `resolve` runs once, at the front of the
+    /// shared load; `isAvailable` must answer offline-availability without it
+    /// (typically: any cached revision satisfies the requirement).
+    public init(
+        resolve: @escaping @Sendable () async throws -> ModelDistribution,
+        isAvailable: @escaping @Sendable () -> Bool,
+        directory: String? = nil,
+        cacheRoot: String? = nil,
+        build: @escaping @Sendable (StoredModel, ModelDistribution) async throws -> Runtime
+    ) {
+        loader = LazyLoader { progress in
+            try await Self.load(try await resolve(), directory: directory, cacheRoot: cacheRoot,
+                                progress: progress, build: build)
+        }
+        availability = isAvailable
+    }
+
+    /// Resolve and build, on the platform default runtime when the alternate one is not on the
+    /// Hub at this revision, not in `directory`, or fails to load. A failure is remembered for
+    /// the process, so the next load goes straight to the default.
+    private static func load(
+        _ distribution: ModelDistribution, directory: String?, cacheRoot: String?,
+        progress: @Sendable @escaping (Double) -> Void,
+        build: @Sendable (StoredModel, ModelDistribution) async throws -> Runtime
+    ) async throws -> Runtime {
+        var chosen = distribution
+        if distribution.hasFallback {
+            if RuntimeFallbacks.shared.failed(distribution, directory: directory) {
+                chosen = distribution.platformDefault
+            } else {
+                do {
+                    let files = try await distribution.resolve(
+                        cacheDirectory: directory, cacheRoot: cacheRoot) { progress($0.fraction * 0.5) }
+                    progress(0.5)
+                    return try await build(files, distribution)
+                } catch {
+                    RuntimeFallbacks.shared.record(distribution, directory: directory)
+                    chosen = distribution.platformDefault
+                }
+            }
+        }
+        let files = try await chosen.resolve(
+            cacheDirectory: directory, cacheRoot: cacheRoot) { progress($0.fraction * 0.5) }
+        progress(0.5)
+        return try await build(files, chosen)
+    }
+
+    /// Wrap a runtime the caller already has the inputs for, such as preloaded
+    /// assets or the wasm host's self-hosted files. Still built lazily and once, so a failure surfaces from
+    /// the same calls as the downloading path.
+    public init(_ build: @escaping @Sendable () throws -> Runtime) {
+        loader = LazyLoader { _ in try build() }
+        availability = { true }
+    }
+
+    /// Whether the model is usable with no network: present in its directory, or
+    /// cached and intact.
+    public func isDownloaded() -> Bool { availability() }
+
+    /// Resolve and build ahead of time, so the first ``value()`` is instant.
+    /// Reports progress `0...1`. Concurrent calls, and an implicit load from a
+    /// first use, share one download.
+    public func download(progress: @Sendable @escaping (Double) -> Void = { _ in }) async throws {
+        try await loader.run { progress(Self.decode($0).phase == .downloading ? Self.decode($0).fraction : 1) }
+    }
+
+    /// Like ``download(progress:)`` but phase-aware: reports the download
+    /// (byte-level fraction) and then the preparing phase (building the
+    /// runtime; on Apple the first launch's Core ML compile lands here).
+    public func load(progress: @Sendable @escaping (ModelLoadProgress) -> Void) async throws {
+        try await loader.run { progress(Self.decode($0)) }
+    }
+
+    private static func decode(_ v: Double) -> ModelLoadProgress {
+        v < 0.5 ? ModelLoadProgress(phase: .downloading, fraction: min(1, v * 2))
+                : ModelLoadProgress(phase: .preparing, fraction: min(1, (v - 0.5) * 2))
+    }
+
+    /// The runtime, loading it on first use.
+    public func value() async throws -> Runtime { try await loader.value() }
+}
+
+/// Alternate-runtime loads that failed in this process, keyed by repo, revision, and directory.
+private final class RuntimeFallbacks: @unchecked Sendable {
+    static let shared = RuntimeFallbacks()
+    private let lock = NSLock()
+    private var keys: Set<String> = []
+
+    private func key(_ distribution: ModelDistribution, directory: String?) -> String {
+        "\(distribution.repo)@\(distribution.revision)@\(directory ?? "")"
+    }
+
+    func failed(_ distribution: ModelDistribution, directory: String?) -> Bool {
+        lock.withLock { keys.contains(key(distribution, directory: directory)) }
+    }
+
+    func record(_ distribution: ModelDistribution, directory: String?) {
+        lock.withLock { _ = keys.insert(key(distribution, directory: directory)) }
+    }
+}

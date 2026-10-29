@@ -5,3 +5,5 @@ New in 1.1:
 - Optional cloud accounts with your own keys: Azure Speech, Azure OpenAI or OpenAI. Keys stay in your Keychain. Off by default.
 - Your stats: words today, this week and all time, speaking speed, day streak and cloud usage, under Settings.
 - Apple's on-device speech recognizer for Dictate and Record.
+- Fixed Record sometimes giving a one-word transcript on iPhone. Recordings now come out in full.
+- New Voz model for English meetings, from Desert Ant Labs. A one-time download, then it runs fully offline in Record.

@@ -1,0 +1,22 @@
+// Unicode normalization as a cross-platform primitive. Text models normalize
+// before tokenizing (SentencePiece/XLM-R expect NFKC), and each platform
+// already ships a normalizer, so this exposes one native-feeling API over the
+// platform's own: no ICU is bundled where the OS or host already provides it.
+//
+//   Apple / Linux : Foundation's precomposedStringWithCompatibilityMapping
+//   Android       : the host's java.text.Normalizer (via CHostBridge), no ICU
+//   WebAssembly   : the JS host's String.prototype.normalize('NFKC')
+//
+// Exactly one backend file is compiled per platform; each provides
+// `nfkcNormalize` and `nfcNormalize`.
+
+public extension String {
+    /// This string under Unicode Normalization Form KC (compatibility
+    /// decomposition, then canonical composition), using the platform's own
+    /// normalizer. Idempotent; returns the input unchanged if normalization is
+    /// unavailable.
+    var nfkc: String { nfkcNormalize(self) }
+
+    /// Canonical composition only; ligatures and width variants are left as they are.
+    var nfc: String { nfcNormalize(self) }
+}

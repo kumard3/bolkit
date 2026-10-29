@@ -1,0 +1,188 @@
+import DesertAnt
+import RealModule
+
+/// The full hybrid detector: tokenization, windowing, BIOES decoding, and the
+/// deterministic-owner merge.
+final class Model: @unchecked Sendable {
+    private let session: any InferenceSession
+    private let tokenizer: Tokenizer
+    private let id2label: [Int: String]
+    private let chunking: Chunking
+
+    private static let seq = 256
+    private static let maxContent = seq - 2      // room for <s> … </s>
+    // Window overlap, matching the Python reference (stride=64); without it an
+    // entity on a window edge is split across two passes and BIOES can't rebuild it.
+    private static let stride = 64
+    private static let step = maxContent - stride
+    private static let lowScore = 0.3
+    // BERT position ids: 0..<seq, matching both exports.
+    private static let positionIDs: [Int32] = (0..<seq).map(Int32.init)
+    private static let typeIDs = [Int32](repeating: 0, count: seq)
+
+    init(assets: ModelAssets, chunking: Chunking = .default) throws {
+        guard let tok = Tokenizer(bytes: assets.tokenizer) else { throw RedactError.resourceMissing }
+        tokenizer = tok
+        self.chunking = chunking
+        id2label = try Model.parseLabels(assets.labelsJSON)
+        session = assets.session
+    }
+
+    /// `labels.json` is `{"id2label": {"0": "O", ...}}`.
+    private struct Labels: Decodable { let id2label: [String: String] }
+    private static func parseLabels(_ json: String) throws -> [Int: String] {
+        let labels = try JSONDecoder().decode(Labels.self, from: json)
+        var out: [Int: String] = [:]
+        for (key, label) in labels.id2label {
+            if let id = Int(key) { out[id] = label }
+        }
+        guard !out.isEmpty else { throw RedactError.resourceMissing }
+        return out
+    }
+
+    // MARK: Detection
+    func detect(_ text: String, minScore: Double) async throws -> [Span] {
+        let threshold = minScore.isFinite ? min(1, max(0, minScore)) : 0.6
+        let det = Deterministic.detect(text, enabled: Deterministic.owned.union(["PHONE"]))
+        // PHONE stays visible so neural inference can refine the deterministic match.
+        let masked = Pipeline.maskText(text, det.filter { Deterministic.owned.contains($0.label) })
+        let ml = try await mlSpans(Pipeline.modelInput(for: masked), minScore: threshold)
+        return Pipeline.cleanSpans(text, Pipeline.relabelByContext(text, Pipeline.resolve(det, ml)))
+    }
+
+    // MARK: Neural spans
+    private func mlSpans(_ text: String, minScore: Double) async throws -> [Span] {
+        let t = UTF16Text(text)
+        let low = min(Model.lowScore, minScore)
+
+        // Overlapping chunks and windows re-emit spans; keep one per
+        // (start, end, label) at its best score, in first-seen order.
+        var best: [String: Int] = [:]
+        var scored: [(Span, Double)] = []
+        for range in Chunks.ranges(t, chunking) {
+            try await scoreChunk(t.slice(range.lowerBound, range.upperBound), at: range.lowerBound,
+                                 low: low, best: &best, scored: &scored)
+        }
+
+        var kept = Pipeline.hysteresis(t, scored, minScore)
+        kept = Pipeline.mergePriority(kept)
+        kept = Pipeline.attachBuildingNumbers(t, Pipeline.extendParticleNames(t, Pipeline.bridgeNameGaps(t, Pipeline.snapSpans(t, kept))))
+        kept = Pipeline.redactSecondaryAddress(t, Pipeline.attachStateCodes(t, Pipeline.redactUsStreet(t, kept)))
+        return Pipeline.mergePriority(kept)
+    }
+
+    /// Score one chunk in 254-token windows, adding its spans at `base` (the
+    /// chunk's UTF-16 offset in the full text).
+    private func scoreChunk(_ text: String, at base: Int, low: Double,
+                            best: inout [String: Int], scored: inout [(Span, Double)]) async throws {
+        let tokens = tokenizer.tokenize(text)
+        let offsets = reconstructOffsets(UTF16Text(text), tokens)
+        var i = 0
+        while !tokens.isEmpty {
+            let end = min(i + Model.maxContent, tokens.count)
+            let chunk = Array(tokens[i..<end])
+            let chunkOffsets = Array(offsets[i..<end])
+            let (tags, tagOffsets, probs) = try await runWindow(chunk, chunkOffsets)
+            // score = max token prob overlapping each BIOES span (within this window)
+            let usableTags = zip(tags, probs).map { $0.1 >= low ? $0.0 : "O" }
+            for span in Pipeline.bioesToSpans(usableTags, tagOffsets) {
+                var mx = 0.0
+                for (k, (a, b)) in tagOffsets.enumerated() where b > a && max(a, span.start) < min(b, span.end) {
+                    mx = max(mx, probs[k])
+                }
+                let global = Span(base + span.start, base + span.end, span.label)
+                let key = "\(global.start):\(global.end):\(global.label)"
+                if let at = best[key] {
+                    if mx > scored[at].1 { scored[at].1 = mx }
+                } else {
+                    best[key] = scored.count
+                    scored.append((global, mx))
+                }
+            }
+            if end == tokens.count { break }
+            i += Model.step
+        }
+    }
+
+    /// Run one window (<= 256 incl. specials); returns (tags, offsets, probs).
+    private func runWindow(_ chunk: [Tokenizer.Token], _ chunkOffsets: [(Int, Int)]) async throws
+        -> ([String], [(Int, Int)], [Double]) {
+        let ids = [tokenizer.bosID] + chunk.map(\.id) + [tokenizer.eosID]
+        let realLen = ids.count
+        var offs: [(Int, Int)] = [(0, 0)] + chunkOffsets + [(0, 0)]
+
+        let (logits, numLabels) = try await logits(ids: ids)
+        guard numLabels > 0, logits.count == realLen * numLabels else {
+            throw RedactError.predictionFailed
+        }
+
+        var tags = [String](repeating: "O", count: realLen)
+        var probs = [Double](repeating: 0, count: realLen)
+        for k in 0..<realLen {
+            var mx = -Double.greatestFiniteMagnitude, top = 0
+            for c in 0..<numLabels {
+                let v = Double(logits[k * numLabels + c])
+                if v > mx { mx = v; top = c }
+            }
+            var sum = 0.0
+            for c in 0..<numLabels { sum += Double.exp(Double(logits[k * numLabels + c]) - mx) }
+            tags[k] = id2label[top] ?? "O"
+            probs[k] = Double.exp(Double(logits[k * numLabels + top]) - mx) / sum
+        }
+        if offs.count > realLen { offs = Array(offs.prefix(realLen)) }
+        return (tags, offs, probs)
+    }
+
+    /// Map each content sub-word to its char range in the source string by
+    /// scanning its surface (minus the `▁` metaspace) forward from a cursor.
+    private func reconstructOffsets(_ t: UTF16Text, _ tokens: [Tokenizer.Token]) -> [(Int, Int)] {
+        var cursor = 0
+        var out: [(Int, Int)] = []
+        out.reserveCapacity(tokens.count)
+        for tok in tokens {
+            var scalars = tok.scalars
+            if scalars.first == "\u{2581}" { scalars.removeFirst() }
+            if scalars.isEmpty { out.append((cursor, cursor)); continue }
+            let core = String(String.UnicodeScalarView(scalars))
+            if let r = t.find(core, from: cursor) {
+                out.append((r.start, r.end))
+                cursor = r.end
+            } else {
+                out.append((cursor, cursor))
+            }
+        }
+        return out
+    }
+
+    // MARK: Inference
+
+    /// Both exports take a fixed 256, int32 window with baked position ids and
+    /// return row-major logits. The `.tflite` declares only `input_ids` and
+    /// `attention_mask` and the session ignores extra inputs, so the same tensor
+    /// dict serves both.
+    private func logits(ids: [Int]) async throws -> (values: [Float], numLabels: Int) {
+        let realLen = ids.count
+        guard realLen > 0, realLen <= Self.seq else { throw RedactError.predictionFailed }
+        var padded = [Int32](repeating: 1, count: Self.seq)   // <pad>
+        var mask = [Int32](repeating: 0, count: Self.seq)
+        for k in 0..<realLen {
+            padded[k] = Int32(ids[k])
+            mask[k] = 1
+        }
+        let logits = try await session.run(
+            inputs: [
+                "input_ids": Tensor(int32: padded, shape: [1, Self.seq]),
+                "attention_mask": Tensor(int32: mask, shape: [1, Self.seq]),
+                "position_ids": Tensor(int32: Self.positionIDs, shape: [1, Self.seq]),
+                "token_type_ids": Tensor(int32: Self.typeIDs, shape: [1, Self.seq]),
+            ],
+            outputs: ["logits"])[0]
+        guard logits.shape.count == 3, let all = logits.float32Values else {
+            throw RedactError.predictionFailed
+        }
+        let numLabels = logits.shape[2]
+        guard numLabels > 0, all.count >= realLen * numLabels else { throw RedactError.predictionFailed }
+        // The window is padded to 256 rows; only the first realLen are real.
+        return (Array(all[0..<(realLen * numLabels)]), numLabels)
+    }
+}

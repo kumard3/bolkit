@@ -1,0 +1,77 @@
+// Re-exported so SDKs importing `Inference` (for the session factory) also get
+// `SDKInfo` and the licensing entry points without a separate import.
+@_exported import Usage
+
+/// Errors from building or running an inference session.
+public enum InferenceError: Error, Sendable {
+    case invalidTensor(String)
+    case sessionUnavailable(String)
+    case runFailed(String)
+
+    public var message: String {
+        switch self {
+        case .invalidTensor(let detail): return "Invalid tensor: \(detail)"
+        case .sessionUnavailable(let detail): return "Inference session unavailable: \(detail)"
+        case .runFailed(let detail): return "Inference failed: \(detail)"
+        }
+    }
+}
+
+/// One loaded model you can run: named input tensors in, the requested output
+/// tensors back (in the order asked). The backends behind it:
+///
+/// - Apple platforms: ``CoreMLSession`` (Core ML).
+/// - Android / Linux: ``LiteRTSession``.
+/// - WebAssembly: ``JSInferenceSession`` (the JS host owns the LiteRT session).
+///
+/// Sessions are expensive to create and cheap to run: create one per model and
+/// reuse it. Autoregressive models feed outputs back as the next step's
+/// inputs. `run` is async because the JS backend awaits a Promise; the native
+/// backends satisfy it synchronously. Sessions are `Sendable`: their state is
+/// set once at init; Core ML is reentrant, LiteRT runs are serialized around
+/// its fixed buffers, and wasm is single-threaded.
+public protocol InferenceSession: Sendable {
+    /// Run the model. `deviceId` names the end-user device for multi-tenant
+    /// hosts (e.g. a server serving many users); `nil` uses the default device.
+    /// The backends ignore it, and licensing does not read it yet. Most callers
+    /// use the two-argument convenience below.
+    func run(inputs: [String: Tensor], outputs: [String], deviceId: String?) async throws -> [Tensor]
+
+    /// The last-dimension extent this graph was compiled at for a named input (its sequence
+    /// width), or `nil` when the runtime cannot report shapes.
+    ///
+    /// Lets a caller size buffers from the artifact rather than from a constant: two clips
+    /// packages differ only in this number (`score` at [16,128] against [16,256]), so a
+    /// hardcoded width would silently truncate every candidate on the wider one.
+    func inputWidth(_ name: String) -> Int?
+
+    /// Whether two runs on this session overlap, or queue.
+    ///
+    /// Core ML takes several requests in flight and spreads them over the
+    /// hardware itself; LiteRT holds a mutex for the length of a run, so a
+    /// second caller waits and the only way to use another core is another
+    /// session. `ParallelRuns` reads this to decide which it is doing.
+    var runsConcurrently: Bool { get }
+}
+
+public extension InferenceSession {
+    /// Assume a run holds the session: at worst that forgoes some parallelism.
+    var runsConcurrently: Bool { false }
+
+    /// Runtimes that cannot introspect their own shapes report nothing, and callers fall back
+    /// to their own default. Returning `nil` rather than a guess keeps "I don't know" distinct
+    /// from "it is 128".
+    func inputWidth(_ name: String) -> Int? { nil }
+
+    /// Run, resolving the device id without the SDK having to pass one.
+    /// Precedence:
+    ///   1. `InferenceContext.deviceId`: a per-call task-local the host binds
+    ///      around this call (the correct path for concurrent multi-tenant hosts).
+    ///   2. `hostProvidedDeviceId()`: a host default (`globalThis.__dalDeviceId`
+    ///      on WASI; native host id elsewhere).
+    ///   3. `nil`: the default device.
+    func run(inputs: [String: Tensor], outputs: [String]) async throws -> [Tensor] {
+        let deviceId = InferenceContext.deviceId ?? hostProvidedDeviceId()
+        return try await run(inputs: inputs, outputs: outputs, deviceId: deviceId)
+    }
+}

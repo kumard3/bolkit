@@ -2,8 +2,9 @@ import { MODELS, formatMB } from './registry';
 import { ModelSpec } from './types';
 import { NEMO_MODELS, NemoModelSpec } from './nemo';
 import { LLM_MODELS, LLMModelSpec } from './llm';
+import { VOZ_CREDIT, VOZ_SIZE_BYTES, vozSupported } from './voz';
 
-export type ModelKind = 'system' | 'whisper' | 'nemo' | 'sherpa' | 'cloud' | 'llm';
+export type ModelKind = 'system' | 'whisper' | 'nemo' | 'sherpa' | 'cloud' | 'llm' | 'voz';
 
 export type CatalogModel = {
   id: string; // namespaced selection id
@@ -75,6 +76,8 @@ const DISPLAY: Record<string, Pick<CatalogModel, 'title' | 'tagline' | 'chip' | 
   },
 };
 
+export const VOZ_MODEL_ID = 'voz';
+
 export function buildCatalog(): CatalogModel[] {
   const system: CatalogModel = {
     id: SYSTEM_MODEL_ID,
@@ -114,6 +117,22 @@ export function buildCatalog(): CatalogModel[] {
     chip: m.chip,
     llm: m,
   }));
+  const voz: CatalogModel[] = vozSupported()
+    ? [
+        {
+          id: VOZ_MODEL_ID,
+          kind: 'voz',
+          label: 'Voz · English meetings',
+          note: `Parakeet v3 on your Neural Engine for recorded meetings. ${VOZ_CREDIT}.`,
+          sizeLabel: formatMB(VOZ_SIZE_BYTES),
+          live: false,
+          title: 'Voz · English meetings',
+          tagline: `Accurate English for recorded meetings, with word timings. Record tab only. ${VOZ_CREDIT}.`,
+          chip: 'Meetings',
+          featured: true,
+        },
+      ]
+    : [];
   const cloud: CatalogModel = {
     id: CLOUD_MODEL_ID,
     kind: 'cloud',
@@ -125,7 +144,7 @@ export function buildCatalog(): CatalogModel[] {
   // Sherpa/Moonshine intentionally omitted: the library's model catalog
   // (XDcobra release) is dead (404). NVIDIA NeMo models below are fetched
   // directly from k2-fsa instead. Whisper covers general offline use.
-  return [system, ...nemo, ...whisper, ...llm, cloud].map((m) =>
+  return [system, ...nemo, ...whisper, ...voz, ...llm, cloud].map((m) =>
     DISPLAY[m.id] ? { ...m, ...DISPLAY[m.id] } : m,
   );
 }

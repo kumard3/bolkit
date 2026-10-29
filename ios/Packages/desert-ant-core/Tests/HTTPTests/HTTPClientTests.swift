@@ -1,0 +1,242 @@
+// Runs where cleartext localhost works and there's a running echo server:
+// macOS/Linux (URLSession) and WASI (Node `fetch`). The tasks (mise run
+// test:swift / test:wasi) build Tools/EchoServer.swift and serve it on
+// 127.0.0.1:$DAL_ECHO_PORT (8199 when unset; see echoPort).
+// iOS/tvOS block cleartext HTTP (ATS); Android's client is exercised via the
+// instrumented JNI harness instead.
+#if os(macOS) || os(Linux) || os(WASI)
+import Testing
+import PlatformSupport
+#if os(WASI)
+import JavaScriptKit
+#endif
+
+/// The echo server's port. Each mise task exports its own DAL_ECHO_PORT: the
+/// umbrella `test` runs test:swift and test:wasi in parallel and both start a
+/// server, so a shared port would lose the bind race. 8199 when unset.
+let echoPort: UInt16 = {
+#if os(WASI)
+    // The harness hands the WASI module an empty environment, so the task's
+    // variable is only visible through Node's process.env.
+    let value = JSObject.global.process.object?.env.object?["DAL_ECHO_PORT"].string
+#else
+    let value = environmentVariable("DAL_ECHO_PORT")
+#endif
+    return value.flatMap { UInt16($0) } ?? 8199
+}()
+
+#if os(macOS)
+import Foundation
+
+/// Manages an EchoServer subprocess when the suite runs under Xcode.
+///
+/// The mise tasks (test:swift / test:wasi) build and start Tools/EchoServer.swift
+/// themselves. Xcode's test runner doesn't, so when we detect an Xcode-launched
+/// process we compile and start it here, and tear it down when the suite ends.
+final class EchoServerFixture: @unchecked Sendable {
+    static let shared = EchoServerFixture()
+
+    /// True when the process was launched by Xcode (not `swift test` / mise).
+    static var isRunningInXcode: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["__CFBundleIdentifier"] == "com.apple.dt.Xcode"
+            || env["XCODE_VERSION_ACTUAL"] != nil
+    }
+
+    private var process: Process?
+
+    private init() {
+        guard Self.isRunningInXcode else { return }
+        start()
+    }
+
+    private func start() {
+        // A server may already be listening (a previous run, or one that mise
+        // started). Reuse it rather than binding again and crashing on EADDRINUSE,
+        // but only if it is ours: any other listener would fail the suites far
+        // from the cause.
+        if canConnect(host: "127.0.0.1", port: echoPort) {
+            guard answersEcho() else {
+                fatalError("Port \(echoPort) is held by something other than the echo server; "
+                    + "set DAL_ECHO_PORT to a free port")
+            }
+            return
+        }
+        do {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("echo-server-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let bin = dir.appendingPathComponent("EchoServer")
+            let source = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Tools/EchoServer.swift")
+
+            // Xcode's test host injects SDKROOT / build env vars that make a plain
+            // `xcrun swiftc` pick the wrong SDK and fail. Scrub them so the build
+            // behaves like a clean shell.
+            var env = ProcessInfo.processInfo.environment
+            for key in ["SDKROOT", "DEVELOPER_DIR", "TOOLCHAINS",
+                        "SWIFT_EXEC", "LIBRARY_PATH", "CPATH"] {
+                env.removeValue(forKey: key)
+            }
+
+            let build = Process()
+            build.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            build.arguments = ["swiftc", "-O", source.path, "-o", bin.path]
+            build.environment = env
+            let buildErr = Pipe()
+            build.standardError = buildErr
+            try build.run()
+            build.waitUntilExit()
+            guard build.terminationStatus == 0 else {
+                let msg = String(decoding: buildErr.fileHandleForReading.readDataToEndOfFile(),
+                                 as: UTF8.self)
+                fatalError("EchoServer build failed (\(build.terminationStatus)):\n\(msg)")
+            }
+
+            let server = Process()
+            server.executableURL = bin
+            server.arguments = [String(echoPort)]
+            server.environment = env
+            try server.run()
+            process = server
+
+            // `deinit` is not guaranteed to run at process exit, which would leak
+            // the server and hold the port (breaking the next test run). Register
+            // an atexit handler so the child is always reaped.
+            EchoServerFixture.registerCleanup(pid: server.processIdentifier)
+
+            // Wait until the port actually accepts a TCP connection.
+            var ready = false
+            for _ in 0..<50 {
+                guard server.isRunning else {
+                    fatalError("EchoServer exited early (status \(server.terminationStatus)); "
+                        + "is port \(echoPort) already in use?")
+                }
+                if answersEcho() { ready = true; break }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            guard ready else { fatalError("EchoServer did not become reachable on 127.0.0.1:\(echoPort)") }
+        } catch {
+            fatalError("Failed to start EchoServer for Xcode run: \(error)")
+        }
+    }
+
+    /// True when the listener on `echoPort` echoes a POST body back, which is
+    /// what the echo server does and what an unrelated server will not.
+    private func answersEcho() -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:\(echoPort)/echo") else { return false }
+        let probe = "dal-echo-\(UUID().uuidString)"
+        var request = URLRequest(url: url, timeoutInterval: 2)
+        request.httpMethod = "POST"
+        request.httpBody = Data(probe.utf8)
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var echoed = false
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            echoed = (response as? HTTPURLResponse)?.statusCode == 200
+                && data.map { String(decoding: $0, as: UTF8.self) } == probe
+            done.signal()
+        }.resume()
+        done.wait()
+        return echoed
+    }
+
+    private func canConnect(host: String, port: UInt16) -> Bool {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        inet_pton(AF_INET, host, &addr.sin_addr)
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+            }
+        }
+    }
+
+    deinit {
+        process?.terminate()
+    }
+
+    /// PIDs to SIGTERM at process exit. A plain C-function `atexit` callback can't
+    /// capture context, so the pid is stashed in a static and killed from there.
+    nonisolated(unsafe) private static var cleanupPID: pid_t = 0
+    private static func registerCleanup(pid: pid_t) {
+        cleanupPID = pid
+        atexit {
+            if EchoServerFixture.cleanupPID > 0 {
+                kill(EchoServerFixture.cleanupPID, SIGTERM)
+            }
+        }
+    }
+}
+#endif
+
+struct HTTPClientTests {
+    static let base = "http://127.0.0.1:\(echoPort)"
+
+    #if os(macOS)
+    // Touching `.shared` starts the fixture once (no-op outside Xcode).
+    static let fixture = EchoServerFixture.shared
+    init() { _ = Self.fixture }
+    #endif
+
+    @Test func postEchoesBodyAndContentType() async throws {
+        let sent = Array(#"{"ping":true}"#.utf8)
+        let response = try await httpPOST("\(Self.base)/echo", body: sent, contentType: "application/json")
+        #expect(response.status == 200)
+        #expect(response.body == sent)                          // body relayed
+        #expect(response.header("Content-Type") == "application/json") // header relayed
+    }
+
+    @Test func postSendsRequestHeaders() async throws {
+        // The license client carries the API key here on every build but wasm,
+        // which sends it in the body.
+        //
+        // Asserted through the body rather than the echoed response header: the wasm
+        // client surfaces only Content-Type and Retry-After from a response, and Node's
+        // fetch does not enforce the browser's forbidden-header rules, so this runs everywhere.
+        let sent = Array(#"{"ping":true}"#.utf8)
+        let response = try await httpPOST(
+            "\(Self.base)/echo",
+            body: sent,
+            contentType: "application/json",
+            headers: ["Authorization": "Bearer dal_test", "X-Echo-Auth": "1"]
+        )
+        #expect(response.status == 200)
+        #expect(String(decoding: response.body, as: UTF8.self) == "Bearer dal_test")
+        #expect(response.header("Content-Type") == "application/json")
+    }
+
+    #if !os(WASI)
+    @Test func postEchoesRequestHeadersAsResponseHeaders() async throws {
+        // Apple and Linux read the whole response header list back, so the echo is
+        // asserted directly there too. Skipped on wasm, which surfaces Content-Type and Retry-After only.
+        let sent = Array(#"{"ping":true}"#.utf8)
+        let response = try await httpPOST(
+            "\(Self.base)/echo",
+            body: sent,
+            contentType: "application/json",
+            headers: ["X-Dal-Test": "1"]
+        )
+        #expect(response.header("X-Dal-Test") == "1")
+    }
+    #endif
+
+    @Test func postSurfacesRetryAfter() async throws {
+        let response = try await httpPOST(
+            "\(Self.base)/echo", body: Array("{}".utf8), contentType: "application/json",
+            headers: ["Retry-After": "120"])
+        #expect(response.header("Retry-After") == "120")
+    }
+
+    @Test func getReturnsOKWithEmptyBody() async throws {
+        let response = try await httpGET("\(Self.base)/health")
+        #expect(response.status == 200)
+        #expect(response.body.isEmpty)
+    }
+}
+#endif

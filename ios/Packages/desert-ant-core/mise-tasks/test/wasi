@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#MISE description="Run the Swift test suite on wasm32-unknown-wasi under Node"
+#MISE dir="{{config_root}}"
+#MISE tools={swift="6.3.3", node="22"}
+# Not at the same time as test:swift: both build Tools/EchoServer.swift and bind
+# 127.0.0.1:8199 (HTTPClientTests connects to that exact port), so run in
+# parallel whichever started second dies with "bind() failed on port 8199".
+#MISE wait_for=["test:swift"]
+source "$MISE_PROJECT_ROOT/Tools/dal.sh"
+
+# This is the browser platform's correctness check: on wasm the JSON, Regex, and
+# TextNormalization backends call into the JS host (JSON.parse, RegExp,
+# String.normalize) and fetch goes through the host too, so those paths only
+# actually execute here.
+#
+# A pinned swift.org toolchain, because the wasm build needs its clang and a
+# matching cross-compilation SDK, which only exists for released versions.
+export DAL_WASM_BUILD=1
+
+# Same wall build:wasm hits: SwiftPM checks JavaScriptKit out with libgit2 and
+# that tree carries symlinks, which Windows only hands to a privileged process.
+if ! dal_can_symlink; then
+    echo "skip: this host cannot create symbolic links, which SwiftPM needs to check out"
+    echo "      JavaScriptKit. Turn on Settings > System > For developers > Developer Mode"
+    echo "      (it grants SeCreateSymbolicLinkPrivilege), start a new shell, and re-run."
+    exit 0
+fi
+
+sdk=$(dal_wasm_sdk)
+
+# Native host binary; the wasm run's fetch reaches it over localhost.
+# Own port: the umbrella `test` runs this and test:swift in parallel, and both
+# start an echo server. The suites read DAL_ECHO_PORT (8199 when unset).
+# DAL_WASI_ECHO_PORT moves it off a port something else on the host holds.
+export DAL_ECHO_PORT="${DAL_WASI_ECHO_PORT:-8198}"
+dal_start_echo_server "$DAL_ECHO_PORT"
+
+#   --disable-sandbox: the js plugin's test harness runs `npm install` to fetch
+#     the WASI shim, and SwiftPM's plugin sandbox (macOS) blocks its network.
+#   --allow-writing-to-package-directory: the plugin writes under .build/.
+# Default scratch path on purpose: the js plugin mislocates products under a
+# custom --scratch-path. test:swift builds into .build-host for the same reason.
+swift package --swift-sdk "$sdk" --disable-sandbox --allow-writing-to-package-directory \
+    js test --environment node

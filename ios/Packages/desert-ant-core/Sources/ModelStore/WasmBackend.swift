@@ -1,0 +1,237 @@
+// wasm backend: HTTP via JS `fetch`; filesystem via node's `fs` (whose *Sync
+// methods match the synchronous FileSystem seam) on node, or an in-memory store
+// in the browser (browser persistence is async - OPFS/Cache API - and would need
+// its own backend; the browser HTTP cache covers refetch). The download
+// and SHA-256 verification are the shared Swift ModelStore on every platform.
+#if os(WASI)
+import JSHost
+import JavaScriptKit
+import JavaScriptEventLoop
+
+/// Whether we are running under node (vs a browser).
+public func jsIsNode() -> Bool {
+    JSObject.global.process.object?.versions.object?.node.string != nil
+}
+
+/// In-memory filesystem for the browser, where there is no synchronous disk.
+/// A class so writes made by the transport are visible to the store and to the
+/// caller that reads the files back after downloading.
+public final class MemoryFileSystem: FileSystem, @unchecked Sendable {
+    private let cacheRoot: String
+    private var files: [String: [UInt8]] = [:]
+
+    public init(cacheRoot: String) { self.cacheRoot = cacheRoot }
+    public func defaultCacheRoot() -> String { cacheRoot }
+    public func exists(_ path: String) -> Bool { files[path] != nil }
+    public func size(_ path: String) -> Int64? { files[path].map { Int64($0.count) } }
+    public func read(_ path: String) throws -> [UInt8] {
+        guard let b = files[path] else { throw ModelStoreError.io("read(\(path))") }
+        return b
+    }
+    public func write(_ path: String, _ bytes: [UInt8]) throws { files[path] = bytes }
+    public func makeDirectory(_ path: String) throws {}
+    public func move(_ from: String, to: String) throws {
+        guard let b = files[from] else { throw ModelStoreError.io("move(\(from))") }
+        files[to] = b; files[from] = nil
+    }
+    public func remove(_ path: String) { files[path] = nil }
+}
+
+
+/// node `fs` (sync) filesystem. The host injects node's `fs` as
+/// `globalThis.__DalNodeFS` (a small object of the *Sync methods) - there is no
+/// `require` under the WASI shim - so this is just the platform's file seam; the
+/// download and verification logic stay in the shared Swift ModelStore.
+/// Every node `fs` call can throw a JS exception (a missing path, a read-only
+/// directory, a full disk). A JS exception raised through a non-throwing
+/// JavaScriptKit call is not catchable in Swift: it unwinds into the host and
+/// kills the process. So every call here goes through `throwing` and is turned
+/// into a `ModelStoreError`, matching the POSIX and Foundation backends - a bad
+/// `directory` must fail the load, not the process.
+public struct JSFileSystem: FileSystem {
+    private let cacheRoot: String
+    private var fs: JSObject? { JSObject.global.__DalNodeFS.object }
+
+    public init(cacheRoot: String) { self.cacheRoot = cacheRoot }
+    public func defaultCacheRoot() -> String { cacheRoot }
+
+    /// Call a node `fs` method, mapping a JS exception (or a missing seam) to a
+    /// Swift error the store can handle.
+    private func call(_ method: String, _ arguments: ConvertibleToJSValue...) throws -> JSValue {
+        guard let fs, let function = fs[method].function else {
+            throw ModelStoreError.io("\(method): missing from the __DalNodeFS host seam")
+        }
+        do {
+            return try function.throws(this: fs, arguments: arguments)
+        } catch {
+            throw ModelStoreError.io("\(method): \(error)")
+        }
+    }
+
+    public func exists(_ path: String) -> Bool {
+        ((try? call("existsSync", path))?.boolean) ?? false
+    }
+
+    public func size(_ path: String) -> Int64? {
+        // statSync throws on a missing path; both that and a non-file result are
+        // "no size", which is what the store's callers expect.
+        guard let stat = try? call("statSync", path).object, let n = stat.size.number else { return nil }
+        return Int64(n)
+    }
+
+    public func read(_ path: String) throws -> [UInt8] {
+        guard let array = JSTypedArray<UInt8>(from: try call("readFileSync", path)) else {
+            throw ModelStoreError.io("readFileSync(\(path)): not a byte array")
+        }
+        return array.withUnsafeBytes { Array($0) }
+    }
+
+    public func write(_ path: String, _ bytes: [UInt8]) throws {
+        _ = try call("writeFileSync", path, JSTypedArray<UInt8>(bytes))
+    }
+
+    public func makeDirectory(_ path: String) throws {
+        let options = JSObject.global.Object.function!.new()
+        options.recursive = true.jsValue
+        _ = try call("mkdirSync", path, options)
+    }
+
+    public func move(_ from: String, to: String) throws {
+        _ = try call("renameSync", from, to)
+    }
+
+    /// Best-effort, like every backend's `remove`: a missing or locked path is
+    /// not an error (unlinkSync throws on both).
+    public func remove(_ path: String) { _ = try? call("unlinkSync", path) }
+}
+
+// Opt-in verbose logging for the WASM model-download transport, enabled from JS
+// by setting `globalThis.__dalHttpDebug = true`. Logs go to `console.log`.
+private func jsTransportDebugEnabled() -> Bool {
+    JSObject.global.__dalHttpDebug.boolean ?? false
+}
+
+private func jsTransportDebugLog(_ message: @autoclosure () -> String) {
+    guard jsTransportDebugEnabled() else { return }
+    _ = JSObject.global.console.object?.log?("[DAL HTTP] \(message())".jsValue)
+}
+
+/// JS `fetch` transport. Writes downloaded bytes through the store's filesystem
+/// so the same code path caches to node's `fs` or the browser's memory store.
+public struct JSTransport: ModelTransport {
+    private let fileSystem: FileSystem
+    public init(fileSystem: FileSystem) { self.fileSystem = fileSystem }
+
+    public func tree(_ url: String) async throws -> [RemoteEntry] {
+        jsTransportDebugLog("tree \(url)")
+        let resp = try await fetch(url)
+        guard let jsonPromise = JSPromise(from: resp.json!()) else { throw ModelStoreError.io("json(\(url))") }
+        let arr = try await jsonPromise.value
+        let n = Int(arr.length.number ?? 0)
+        var out: [RemoteEntry] = []
+        for i in 0..<n {
+            let e = arr[i]
+            guard e.type.string == "file" else { continue }
+            let sha = e.lfs.object?.oid.string
+            out.append(RemoteEntry(path: e.path.string ?? "", size: Int64(e.size.number ?? 0), sha256: sha))
+        }
+        return out
+    }
+
+    public func download(_ url: String, to destinationPath: String, onBytes: @escaping @Sendable (Int64) -> Void) async throws {
+        jsTransportDebugLog("download \(url) -> \(destinationPath)")
+        let resp = try await fetch(url)
+        // Stream the body for fine-grained progress: read the ReadableStream
+        // chunk by chunk, reporting cumulative bytes, then write the file.
+        if let body = resp.body.object, let reader = body.getReader?().object {
+            var all = [UInt8]()
+            while true {
+                guard let readPromise = JSPromise(from: reader.read!()) else { throw ModelStoreError.io("read(\(url))") }
+                let result = try await readPromise.value
+                if result.done.boolean == true { break }
+                if let chunk = JSTypedArray<UInt8>(from: result.value) {
+                    chunk.withUnsafeBytes { all.append(contentsOf: $0) }
+                    onBytes(Int64(all.count))
+                }
+            }
+            try fileSystem.write(destinationPath, all)
+            return
+        }
+        // Fallback (no streaming body): whole-body arrayBuffer.
+        guard let bufPromise = JSPromise(from: resp.arrayBuffer!()) else { throw ModelStoreError.io("arrayBuffer(\(url))") }
+        let u8 = JSObject.global.Uint8Array.function!.new(try await bufPromise.value)
+        guard let arr = JSTypedArray<UInt8>(from: u8) else { throw ModelStoreError.io("bytes(\(url))") }
+        let bytes = arr.withUnsafeBytes { Array($0) }
+        try fileSystem.write(destinationPath, bytes)
+        onBytes(Int64(bytes.count))
+    }
+
+    private func fetch(_ url: String) async throws -> JSObject {
+        jsTransportDebugLog("fetch \(url)")
+        var opts = JSValue.undefined
+        if let authorization = hubAuthorization(for: url), let object = JSObject.global.Object.function {
+            let headers = object.new()
+            headers["Authorization"] = authorization.jsValue
+            let options = object.new()
+            options["headers"] = .object(headers)
+            opts = .object(options)
+        }
+        // `this: JSObject.global` is required, not cosmetic: a browser's `fetch`
+        // is a Window method and throws "Illegal invocation" when called
+        // detached. Node tolerates a detached call, so only a real browser
+        // catches this, not the Node-hosted WASI suite.
+        guard let fetch = JSObject.global.fetch.function,
+              let promise = JSPromise(from: fetch(this: JSObject.global, url, opts)) else {
+            throw ModelStoreError.io("fetch(\(url))")
+        }
+        let value = try await promise.value
+        let status = Int(value.object?.status.number ?? 0)
+        jsTransportDebugLog("fetch \(url) -> status \(status)")
+        guard let resp = value.object, (resp.ok.boolean ?? false) || (resp.status.number ?? 0) < 400 else {
+            throw ModelStoreError.io("fetch(\(url)) not ok")
+        }
+        return resp
+    }
+}
+
+public extension StoredModel {
+    static func platformLocal(rootPath: String) throws -> StoredModel {
+        guard jsIsNode() else {
+            throw ModelStoreError.io("local model directories are only available under node")
+        }
+        return StoredModel(rootPath: rootPath, fileSystem: JSFileSystem(cacheRoot: rootPath))
+    }
+
+    /// Hand the model to the JS host so it can compile it: the cached path under
+    /// node (avoiding a large copy across the wasm boundary), the bytes in the
+    /// browser, whose store is in memory. The host's typed contract lives in
+    /// `Sources/JSHost/Host.swift`.
+    func createJavaScriptSession(modelFile: String) async throws {
+        do {
+            if jsIsNode() {
+                try await dalModelHost.createSessionFromPath(path(modelFile))
+            } else {
+                try await dalModelHost.createSessionFromBytes(JSUint8Array(try read(modelFile)))
+            }
+        } catch let error as JSException {
+            throw ModelStoreError.io("the host could not compile the model: \(error)")
+        }
+    }
+}
+
+public extension ModelStore {
+    /// `cacheRoot` is the base for the managed nested layout (node `~/.cache`);
+    /// empty in the browser (in-memory filesystem).
+    static func platformDefault(cacheRoot: String?) throws -> ModelStore {
+        ModelStore.js(cacheRoot: cacheRoot ?? "").0
+    }
+
+    /// Default wasm store: JS `fetch` + node `fs` (persistent) or, in the
+    /// browser, an in-memory filesystem. Returns the filesystem too so the
+    /// caller can read the downloaded files back from the same store.
+    static func js(cacheRoot: String, endpoint: String = "https://huggingface.co") -> (ModelStore, FileSystem) {
+        let fs: FileSystem = jsIsNode() ? JSFileSystem(cacheRoot: cacheRoot) : MemoryFileSystem(cacheRoot: cacheRoot)
+        return (ModelStore(transport: JSTransport(fileSystem: fs), fileSystem: fs, endpoint: endpoint), fs)
+    }
+}
+#endif

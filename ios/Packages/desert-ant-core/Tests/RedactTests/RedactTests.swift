@@ -1,0 +1,300 @@
+import Foundation
+import Testing
+import DesertAnt
+import TestSupport
+@testable import Redact
+
+/// Thread-safe Double for capturing progress across concurrency domains.
+final class LockedDouble: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0.0
+    func set(_ v: Double) { lock.withLock { value = v } }
+    func get() -> Double { lock.withLock { value } }
+}
+
+struct RedactTests {
+    // MARK: deterministic recognizers (no model needed)
+
+    @Test func emailAndURL() {
+        let spans = Deterministic.detect("Reach me at anna.k@example.com or https://ex.com/x")
+        let labels = Set(spans.map(\.label))
+        #expect(labels.contains("EMAIL"))
+        #expect(labels.contains("URL"))
+    }
+
+    @Test func creditCardIsLuhnGated() {
+        // valid Luhn + context means detected
+        let ok = Deterministic.detect("charge my card 4539 1488 0343 6467")
+        #expect(ok.contains { $0.label == "CREDIT_CARD" })
+        // invalid Luhn means not a credit card
+        let bad = Deterministic.detect("card 1234 5678 9012 3456")
+        #expect(!bad.contains { $0.label == "CREDIT_CARD" })
+    }
+
+    @Test func ibanChecksum() {
+        let ok = Deterministic.detect("IBAN GB29 NWBK 6016 1331 9268 19")
+        #expect(ok.contains { $0.label == "BANK_ACCOUNT" })
+    }
+
+    @Test func usStreetAndState() {
+        let t = UTF16Text("mailed to 123 Any Street, Seattle, WA 98109")
+        let spans = Pipeline.attachStateCodes(t, Pipeline.redactUsStreet(t, []))
+        let byLabel = Dictionary(grouping: spans) { $0.label }
+        #expect(byLabel["BUILDING_NUMBER"]?.count == 1)
+        #expect(byLabel["STREET_NAME"]?.contains { t.slice($0.start, $0.end) == "Any Street" } ?? false)
+        #expect(byLabel["STATE"]?.contains { t.slice($0.start, $0.end) == "WA" } ?? false)
+    }
+
+    @Test func secondaryAddress() {
+        let t = UTF16Text("123 Main St, Apt 4B")
+        let spans = Pipeline.redactSecondaryAddress(t, [])
+        #expect(spans.contains { $0.label == "SECONDARY_ADDRESS" && t.slice($0.start, $0.end) == "Apt 4B" })
+        // precision: ordinary prose is left alone
+        let prose = UTF16Text("unit tests pass")
+        #expect(Pipeline.redactSecondaryAddress(prose, []).isEmpty)
+    }
+
+    @Test func tokenizerRejectsTruncatedData() {
+        #expect(Tokenizer(bytes: [0x52, 0x44, 0x54, 0x4B]) == nil)
+        var header = [UInt8](repeating: 0, count: 21)
+        header.replaceSubrange(0...3, with: [0x52, 0x44, 0x54, 0x4B])
+        #expect(Tokenizer(bytes: header) == nil)
+    }
+
+    @Test func optionsClampInvalidConfidence() {
+        #expect(Options(minimumConfidence: -1).minimumConfidence == 0)
+        #expect(Options(minimumConfidence: 2).minimumConfidence == 1)
+        #expect(Options(minimumConfidence: .nan).minimumConfidence == 0.6)
+    }
+
+    // MARK: deterministic parity vs the Python reference (1354 cases)
+
+    // The corpus is a SwiftPM resource, and `Bundle.module` has no WASI backing,
+    // so the parity run is off-wasm; the recognizers themselves are exercised
+    // above on every platform (on wasm through the JS RegExp backend).
+#if !os(WASI)
+    @Test func deterministicCorpusParity() throws {
+        struct Row: Decodable {
+            let text: String
+            let py: [Expected]
+        }
+        struct Expected: Decodable {
+            let start: Int, end: Int, label: String
+            init(from decoder: Decoder) throws {
+                var c = try decoder.unkeyedContainer()
+                start = try c.decode(Int.self)
+                end = try c.decode(Int.self)
+                label = try c.decode(String.self)
+            }
+        }
+        let enabled: Set<String> = [
+            "EMAIL", "URL", "IP_ADDRESS", "CREDIT_CARD", "BANK_ACCOUNT", "GOVERNMENT_ID",
+            "TAX_ID", "PASSPORT", "DRIVERS_LICENSE", "IMEI", "SSN", "ROUTING_NUMBER", "PHONE",
+        ]
+        let url = try #require(Bundle.module.url(forResource: "deterministic_corpus", withExtension: "json"))
+        let rows = try JSONDecoder().decode([Row].self, from: try Data(contentsOf: url))
+        #expect(rows.count > 1000)
+        var failures: [String] = []
+        for row in rows {
+            let got = Set(Deterministic.detect(row.text, enabled: enabled).map { "\($0.start),\($0.end),\($0.label)" })
+            let want = Set(row.py.map { "\($0.start),\($0.end),\($0.label)" })
+            if got != want { failures.append("\(row.text): want \(want.sorted()) got \(got.sorted())") }
+        }
+        // A `Comment` takes a string literal or interpolation, not a built String.
+        let sample = failures.prefix(5).joined(separator: "\n")
+        #expect(failures.isEmpty, "\(failures.count) mismatches\n\(sample)")
+    }
+#endif
+}
+
+// MARK: model-backed
+
+// `.modelBacked` (TestSupport) decides where these run - one trait on the suite
+// rather than a platform `#if` around each test, so they still compile everywhere
+// and a skip is reported instead of silently vanishing from the count. wasm is the
+// exception that does need the compile-time guard: there the shared fixture does
+// not exist, because the model store's filesystem and transport come from the JS
+// host the app installs, which the bare test harness never does.
+//
+// `.serialized` because swift-testing runs tests in parallel by default, and each
+// `Redact()` would otherwise load its own Core ML session for the same model.
+#if !os(WASI)
+@Suite(.serialized, .modelBacked) struct RedactModelTests {
+    /// A redactor over the cached model (offline after the fixture's download).
+
+    // MARK: over-redaction remediation
+
+    /// `unit4` is a product name, not an apartment number.
+    @Test func unitDesignatorRequiresSeparator() {
+        for s in ["unit4", "Visma Nova en unit4 geven een foutmelding.",
+                  "We migrated from unit4 to Odoo last year."] {
+            #expect(Pipeline.redactSecondaryAddress(UTF16Text(s), []).isEmpty, "over-redacted \(s)")
+        }
+        for s in ["Apt 4B", "apt 4b", "Suite 300", "Unit 12", "Ste 200", "Apt. 4B", "Suite #300"] {
+            #expect(Pipeline.redactSecondaryAddress(UTF16Text(s), [])
+                .contains { $0.label == "SECONDARY_ADDRESS" }, "\(s) should still match")
+        }
+    }
+
+    /// An IBAN followed by a word must still be caught.
+    @Test func ibanInRunningProse() {
+        for s in ["Mijn IBAN NL91ABNA0417164300 klopt niet",
+                  "Please refund to DE89370400440532013000 today",
+                  "Betaal naar BE68539007547034 alstublieft"] {
+            #expect(Deterministic.detect(s).contains { $0.label == "BANK_ACCOUNT" }, "IBAN leaked in \(s)")
+        }
+        let t = UTF16Text("Mijn IBAN NL91ABNA0417164300 klopt niet")
+        let spans = Deterministic.detect("Mijn IBAN NL91ABNA0417164300 klopt niet")
+            .filter { $0.label == "BANK_ACCOUNT" }
+        #expect(spans.count == 1)
+        #expect(t.slice(spans[0].start, spans[0].end) == "NL91ABNA0417164300")
+        // grouped IBANs still match whole
+        let g = UTF16Text("My IBAN is NL91 ABNA 0417 1643 00")
+        let gs = Deterministic.detect("My IBAN is NL91 ABNA 0417 1643 00").filter { $0.label == "BANK_ACCOUNT" }
+        #expect(gs.count == 1)
+        #expect(g.slice(gs[0].start, gs[0].end) == "NL91 ABNA 0417 1643 00")
+        // ... and one running into a word is still not a match
+        #expect(Deterministic.detect("NL91ABNA0417164300graag").filter { $0.label == "BANK_ACCOUNT" }.isEmpty)
+    }
+
+    /// ALL-CAPS is title-cased before the ML pass; offsets must survive.
+    @Test func shoutingNormalisedForModel() {
+        #expect(Pipeline.isShouting("TONI BAN"))
+        #expect(!Pipeline.isShouting("Toni Ban"))
+        #expect(!Pipeline.isShouting("A"))
+        #expect(Pipeline.modelInput(for: "TONI BAN") == "Toni Ban")
+        #expect(Pipeline.modelInput(for: "ТОНЕ ПУЛЕВ") == "Тоне Пулев")
+        #expect(Pipeline.modelInput(for: "JEAN-PIERRE DUPONT") == "Jean-Pierre Dupont")
+        #expect(Pipeline.modelInput(for: "Jan de Vries") == "Jan de Vries")
+        for s in ["TONI BAN", "ТОНЕ ПУЛЕВ", "CTIRAD BENEŠ", "GROSSE STRAßE"] {
+            #expect(Pipeline.modelInput(for: s).utf16.count == s.utf16.count, "offsets shifted for \(s)")
+        }
+    }
+
+    /// Name-run heuristics must stand down when every word is capitalised,
+    /// otherwise title-casing manufactures the signal they key on.
+    @Test func casingInformativeness() {
+        #expect(!Pipeline.casingIsInformative("TONI BAN BELDE OVER DE FACTUUR"))
+        #expect(!Pipeline.casingIsInformative("Toni Ban Belde Over De Factuur"))
+        #expect(Pipeline.casingIsInformative("Jan de Vries belde over de factuur"))
+        #expect(Pipeline.casingIsInformative("TONI BAN"))   // too few words to judge
+    }
+
+    /// ORG is detected but not redacted by default.
+    @Test func orgIsOffByDefault() {
+        #expect(Label.allCases.contains(.org))
+        #expect(!Label.defaultEnabled.contains(.org))
+        #expect(Label.defaultEnabled.count == Label.allCases.count - 1)
+        for l in Label.allCases where l != .org {
+            #expect(Label.defaultEnabled.contains(l), "\(l.rawValue) should be on by default")
+        }
+    }
+
+    private func cachedRedact() -> Redact { Redact() }
+
+    @Test func tokenizerLoads() async throws {
+        let files = try await ModelFixture.files(RedactModel.self)
+        let tok = try #require(Tokenizer(bytes: try files.read(RedactModel.tokenizer)))
+        #expect(tok.bosID == 0)
+        #expect(tok.eosID == 2)
+        #expect(!tok.tokenize("Contact Anna Kovács in Berlin").isEmpty)
+    }
+
+    @Test func localModelDirectory() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("redact-local-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await ModelFixture.populate(RedactModel.self, into: directory)
+
+        let redact = Redact(directory: directory.path)
+        #expect(redact.isDownloaded())
+        #expect(!Redact(directory: directory.path + "-missing").isDownloaded())
+
+        // A directory holding an interrupted download (a `.dal-meta` marker but
+        // no verified manifest) is not adopted as a complete model.
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent(".dal-meta"), withIntermediateDirectories: true)
+        #expect(!Redact(directory: directory.path).isDownloaded())
+        try FileManager.default.removeItem(at: directory.appendingPathComponent(".dal-meta"))
+
+        // download drives the load to completion and reports final progress.
+        let progress = LockedDouble()
+        try await redact.download { progress.set($0) }
+        #expect(abs(progress.get() - 1.0) < 0.0001)
+
+        // Concurrent redactions share the single load (no crash, both succeed).
+        async let a = redact.redaction(of: "Email anna@example.com")
+        async let b = redact.redaction(of: "Email bob@example.com")
+        let (ra, rb) = try await (a, b)
+        #expect(ra.redactedText.contains("[EMAIL_1]"))
+        #expect(rb.redactedText.contains("[EMAIL_1]"))
+    }
+
+    @Test func redactEndToEnd() async throws {
+        let r = try await cachedRedact().redaction(of: "Email Anna Kovács at anna@example.hu.")
+        #expect(r.redactedText.contains("[EMAIL_1]"))
+        #expect(!r.redactedText.contains("anna@example.hu"))
+    }
+
+    /// The neural detector finds the name.
+    ///
+    /// `.needsNeuralEngine` because the current `redact.mlmodelc` returns no
+    /// neural spans whatsoever on Core ML's CPU and GPU paths - not lower
+    /// confidence, nothing - while returning them at confidence 1.0 on the Neural
+    /// Engine. That is a model-export defect (emo's export agrees across all
+    /// units), and it means the SDK silently degrades to deterministic-only
+    /// redaction on an Intel Mac, a virtualized Mac, or the simulator. Drop the
+    /// trait once redact is re-exported.
+    ///
+    /// The threshold is explicit and low so this checks that the span is
+    /// *detected*, not that it clears the shipping default of 0.6.
+    @Test(.needsNeuralEngine) func neuralNameDetection() async throws {
+        let r = try await cachedRedact().redaction(
+            of: "Email Anna Kovács at anna@example.hu.",
+            options: .init(minimumConfidence: 0.1))
+        #expect(r.items.contains { $0.label == .givenName && $0.original == "Anna" },
+                "no GIVEN_NAME span: \(r.items.map { "\($0.label.rawValue)=\($0.original)" })")
+        #expect(!r.redactedText.contains("Anna"))
+    }
+
+    @Test func labelFilter() async throws {
+        let text = "Call +34 600 100 200 or email me@x.com"
+        let phonesOnly = try await cachedRedact().redaction(of: text, options: .init(labels: [.phone]))
+        #expect(phonesOnly.items.allSatisfy { $0.label == .phone })
+        #expect(phonesOnly.items.contains { $0.original.contains("600") })
+        #expect(phonesOnly.redactedText.contains("[PHONE_1]"))     // phone redacted
+        #expect(phonesOnly.redactedText.contains("me@x.com"))      // email kept (filtered out)
+    }
+
+    @Test func reversibleRoundTrip() async throws {
+        let text = "Email anna@example.hu and bob@example.hu about the invoice."
+        let r = try await cachedRedact().redaction(of: text)
+        #expect(r.items.filter { $0.label == .email }.count == 2)
+        #expect(r.redactedText.contains("[EMAIL_1]"))
+        #expect(r.redactedText.contains("[EMAIL_2]"))
+        #expect(!r.redactedText.contains("example.hu"))
+        // An LLM rewrites the text but keeps the placeholders.
+        let rewritten = "Please contact [EMAIL_1] (cc [EMAIL_2]) regarding the invoice."
+        let restored = r.restore(rewritten)
+        #expect(restored.contains("anna@example.hu"))
+        #expect(restored.contains("bob@example.hu"))
+        #expect(!restored.contains("[EMAIL_"))
+    }
+
+    /// Run as one string, this email lost six of its seven names: the model was
+    /// trained on short strings, so it now sees sentence-packed chunks.
+    /// `.needsNeuralEngine` for the reason on `neuralNameDetection`.
+    @Test(.needsNeuralEngine) func namesSurviveMultiSentenceText() async throws {
+        let text = "Hi team, quick update on the Henderson account. I spoke with Rachel Adams this morning "
+            + "and she confirmed the renewal. Tom Becker from finance will send the invoice on Friday. "
+            + "If anything changes, ping me or Olivia Park. Thanks, Daniel"
+        let r = try await cachedRedact().redaction(of: text)
+        for name in ["Rachel", "Adams", "Tom", "Becker", "Olivia", "Park", "Daniel"] {
+            #expect(!r.redactedText.contains(name), "\(name) leaked: \(r.redactedText)")
+        }
+        // Placeholders are numbered across chunks, so restore still round-trips.
+        #expect(r.restore(r.redactedText) == text)
+        #expect(Set(r.items.map(\.placeholder)).count == r.items.count)
+    }
+}
+#endif

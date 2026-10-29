@@ -4,6 +4,8 @@ import { isInstalled, transcribeWithModel } from './index';
 import { sherpaModelById, transcribeDetailedWithSherpa } from './sherpa';
 import { transcribeDetailedWithNemo } from './nemo';
 import { transcribeCloud } from './cloud';
+import { transcribeWithVoz, vozInstalled } from './voz';
+import { mergeVocab } from './vocab';
 import { getCloud } from './settings';
 import type { TimedUnit } from './types';
 
@@ -34,6 +36,11 @@ export async function recordTranscribe(
   }
   if (model.kind === 'nemo' && model.nemo) {
     return transcribeDetailedWithNemo(model.nemo, wavUri);
+  }
+  if (model.kind === 'voz') {
+    if (!(await vozInstalled())) throw new Error(`Download ${model.label} in Models first.`);
+    const res = await transcribeWithVoz(wavUri, mergeVocab([]));
+    return { text: res.text, units: res.units };
   }
   if (model.kind === 'sherpa' && model.sherpaId) {
     const spec = sherpaModelById(model.sherpaId);

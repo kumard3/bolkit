@@ -1,0 +1,343 @@
+#if canImport(CoreML)
+import CoreML
+#endif
+import Foundation
+import DesertAnt
+
+public enum VozError: Error, CustomStringConvertible, Sendable {
+    case unsupportedPlatform
+    case invalidModel(String)
+    case invalidAudio(String)
+
+    public var description: String {
+        switch self {
+        case .unsupportedPlatform:
+            return "Voz has no inference backend on this platform"
+        case .invalidModel(let m): return "invalid model: \(m)"
+        case .invalidAudio(let m): return "invalid audio: \(m)"
+        }
+    }
+}
+
+/// On-device speech recognition: a transcript with word-level timestamps,
+/// running entirely on the Neural Engine.
+///
+/// ```swift
+/// let voz = try await Voz()
+/// let result = try await voz.transcribe(url) { print($0.fractionCompleted) }
+/// print(result.text, result.words.first?.start ?? 0)
+/// ```
+///
+/// The model downloads on first use and is cached; pass a `directory` to adopt
+/// files you have already placed somewhere, or call ``download(progress:)`` to
+/// fetch it ahead of time.
+public actor Voz {
+
+    /// How far along a transcription is.
+    public struct Progress: Sendable {
+        /// 0...1 over the whole request.
+        public let fractionCompleted: Double
+    }
+
+    public struct Result: Sendable {
+        public let text: String
+        /// Resolution is 80 ms.
+        public let words: [Word]
+        /// Length of the audio transcribed.
+        public let duration: TimeInterval
+        /// Wall-clock time spent transcribing it.
+        public let processingTime: TimeInterval
+        /// Seconds of audio processed per second of wall clock.
+        public var realtimeFactor: Double {
+            processingTime > 0 ? duration / processingTime : 0
+        }
+    }
+
+    private let pipeline: Pipeline
+    // Actor isolation is not a lock across awaits, and a transcription suspends
+    // at every model call (the browser's are promises, and the native decode
+    // join is an await) while the pipeline's buffers are still live. Two
+    // concurrent calls would interleave into one set of them.
+    private var transcribing = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    private func acquirePipeline() async {
+        if transcribing {
+            await withCheckedContinuation { waiting.append($0) }
+        } else {
+            transcribing = true
+        }
+    }
+
+    private func releasePipeline() {
+        if waiting.isEmpty {
+            transcribing = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+    /// Audio rate the model expects. Input at another rate is resampled.
+    public nonisolated let sampleRate: Double
+
+
+    /// The languages the model was trained on, as ISO 639-1 codes.
+    ///
+    /// It does not detect which one it is hearing, and audio in a language that
+    /// is not here produces confident nonsense rather than an error. A caller
+    /// routing mixed input should name the language first (see `Ear`) and check
+    /// it against this set.
+    public static let supportedLanguages: Set<String> = [
+        "bg", "cs", "da", "de", "el", "en", "es", "et", "fi",
+        "fr", "hr", "hu", "it", "lt", "lv", "mt", "nl", "pl",
+        "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+    ]
+
+    // MARK: - Availability
+
+    /// Whether the model is already on disk, so a caller can decide whether to
+    /// show a download step.
+    public static func isDownloaded(directory: String? = nil, cacheRoot: String? = nil) -> Bool {
+        VozModel.isAvailable(directory: directory, cacheRoot: cacheRoot)
+    }
+
+    /// Fetch the model without loading it, for downloading during onboarding.
+    ///
+    /// Worth doing: the first load after a download pays a one-time Neural Engine
+    /// specialization of roughly 20 s, and every load after it takes about
+    /// 0.2 s. Doing both here keeps that cost off the first transcription.
+    @discardableResult
+    public static func download(
+        directory: String? = nil,
+        cacheRoot: String? = nil,
+        progress: @Sendable @escaping (DownloadProgress) -> Void = { _ in }
+    ) async throws -> String {
+        try await VozModel.resolve(directory: directory, cacheRoot: cacheRoot,
+                                        progress: progress).rootPath
+    }
+
+    // MARK: - Creation
+
+    #if canImport(CoreML) || canImport(CLiteRt) || canImport(COnnxRuntime)
+    /// Load the model, downloading it first if needed.
+    public init(
+        directory: String? = nil,
+        cacheRoot: String? = nil,
+        progress: @Sendable @escaping (DownloadProgress) -> Void = { _ in }
+    ) async throws {
+        guard VozModel.supports(.current) else { throw VozError.unsupportedPlatform }
+        let stored = try await VozModel.resolve(directory: directory, cacheRoot: cacheRoot,
+                                                     progress: progress)
+        let root = URL(fileURLWithPath: stored.rootPath)
+        #if canImport(COnnxRuntime) && !canImport(CoreML)
+        // Named in full: CLiteRt is visible here on Windows too, and the bare
+        // `init(modelDirectory:)` would pick the LiteRT loader.
+        try self.init(modelDirectory: root.appendingPathComponent(VozModel.onnxDirectory),
+                      useGPU: true)
+        #else
+        try self.init(modelDirectory: root)
+        #endif
+    }
+    #endif
+
+    #if canImport(CoreML)
+    /// Load from a directory of model files you manage yourself.
+    public init(modelDirectory: URL, computeUnits: MLComputeUnits = .cpuAndNeuralEngine) throws {
+        func read(_ name: String) throws -> Data {
+            try Data(contentsOf: modelDirectory.appendingPathComponent(name))
+        }
+        let assets = try Assets(meta: try read("meta.json"), vocab: try read("vocab.json"),
+                                embeddingBytes: try Data(
+                                    contentsOf: modelDirectory
+                                        .appendingPathComponent("embedding.f16"),
+                                    options: .mappedIfSafe))
+        // The engine binds these buffers into its feature providers and output
+        // backings at load, so both halves have to be handed the same set, with a
+        // slot per overlapped encode. One window per slot: this graph is a fixed
+        // shape.
+        let lanes = try CoreMLEngine.declaredLanes(directory: modelDirectory)
+        let buffers = try PipelineBuffers(configuration: assets.configuration, lanes: lanes,
+                                          batch: 1, depth: CoreMLEngine.encodeDepthForLoad)
+        let engine = try CoreMLEngine(directory: modelDirectory, computeUnits: computeUnits,
+                                      buffers: buffers)
+        pipeline = Pipeline(assets: assets, engine: engine, buffers: buffers)
+        sampleRate = Double(assets.configuration.sampleRate)
+        licenseOnLoad(VozModel.sdkInfo)
+    }
+    #elseif canImport(CLiteRt)
+    /// Load from a directory of model files you manage yourself.
+    ///
+    /// The LiteRT bundle carries its own geometry (`meta.litert.json`): the
+    /// export differs from the Core ML one (float32 I/O, one decode lane at
+    /// width 1), and reading the Apple file would size every buffer wrong.
+    public init(modelDirectory: URL) throws {
+        func read(_ name: String) throws -> Data {
+            try Data(contentsOf: modelDirectory.appendingPathComponent(name))
+        }
+        let assets = try Assets(meta: try read(VozModel.litertMeta),
+                                vocab: try read("vocab.json"),
+                                embeddingBytes: try read("embedding.f16"))
+        let (engine, buffers) = try LiteRTEngine.load(directory: modelDirectory,
+                                                      configuration: assets.configuration)
+        pipeline = Pipeline(assets: assets, engine: engine, buffers: buffers)
+        sampleRate = Double(assets.configuration.sampleRate)
+    }
+    #endif
+
+    #if canImport(COnnxRuntime) && !canImport(CoreML)
+    /// Load from a directory of ONNX models you manage yourself.
+    ///
+    /// The Windows counterpart of the Core ML initializer above, and the same
+    /// shape: read the sidecars, size the buffers from the geometry they
+    /// declare, build the engine over them. `decode_lanes` comes from
+    /// `meta.json` rather than from the model, because an ONNX graph states its
+    /// lane count in the export and not in a queryable description.
+    public init(modelDirectory: URL, useGPU: Bool = true) throws {
+        func read(_ name: String) throws -> Data {
+            try Data(contentsOf: modelDirectory.appendingPathComponent(name))
+        }
+        let metaData = try read("meta.json")
+        let assets = try Assets(meta: metaData, vocab: try read("vocab.json"),
+                                embeddingBytes: try Data(
+                                    contentsOf: modelDirectory
+                                        .appendingPathComponent("embedding.f16"),
+                                    options: .mappedIfSafe))
+        struct Lanes: Decodable { let decodeLanes: Int
+            enum CodingKeys: String, CodingKey { case decodeLanes = "decode_lanes" } }
+        let lanes = try JSONDecoder().decode(Lanes.self, from: metaData).decodeLanes
+        guard lanes > 0 else { throw VozError.invalidModel("meta.json has no decode_lanes") }
+        let buffers = try PipelineBuffers(configuration: assets.configuration, lanes: lanes,
+                                          depth: OnnxEngine.encodeDepthForLoad)
+        let engine = try OnnxEngine(directory: modelDirectory,
+                                    accelerator: useGPU ? .gpu : .cpu, lanes: lanes)
+        self.init(assets: assets, engine: engine, buffers: buffers)
+    }
+    #endif
+
+    /// Load from sidecars and an engine the caller built.
+    ///
+    /// This is the seam the wasm entry point uses: the browser fetched the
+    /// files and compiled the models itself, so there is no directory to read.
+    init(assets: Assets, engine: Engine, buffers: PipelineBuffers) {
+        pipeline = Pipeline(assets: assets, engine: engine, buffers: buffers)
+        sampleRate = Double(assets.configuration.sampleRate)
+        licenseOnLoad(VozModel.sdkInfo)
+    }
+
+    // MARK: - Transcription
+
+    /// Transcribe mono samples at ``sampleRate``.
+    ///
+    /// `vocabulary`: names and terms the audio likely contains, cased as they
+    /// should be written. Keep it relevant to the recording.
+    public func transcribe(
+        samples: [Float],
+        vocabulary: [String] = [],
+        progress: @Sendable (Progress) -> Void = { _ in }
+    ) async throws -> Result {
+        guard !samples.isEmpty else { throw VozError.invalidAudio("no samples") }
+        let stream = ArrayAudioStream(samples)
+        return try await transcribe(stream: stream,
+                              duration: Double(samples.count) / sampleRate,
+                              vocabulary: vocabulary, progress: progress)
+    }
+
+    /// Transcribe from a source that is read as it goes, so that a long
+    /// recording does not have to be resident all at once.
+    func transcribe(
+        stream: some AudioStream,
+        duration: Double,
+        vocabulary: [String] = [],
+        progress: @Sendable (Progress) -> Void
+    ) async throws -> Result {
+        await acquirePipeline()
+        defer {
+            pipeline.booster = nil
+            releasePipeline()
+        }
+        pipeline.booster = vocabulary.isEmpty ? nil
+            : Booster(phrases: vocabulary, vocabulary: pipeline.vocabulary)
+        let started = Date()
+        let (text, words) = try await pipeline.run(stream: stream) {
+            progress(Progress(fractionCompleted: min(1, max(0, $0))))
+        }
+        progress(Progress(fractionCompleted: 1))
+        guard !words.isEmpty || duration > 0 else {
+            throw VozError.invalidAudio("no samples")
+        }
+        let bounded = words.map {
+            $0.end <= duration ? $0
+                : Word(text: $0.text, start: Swift.min($0.start, duration), end: duration)
+        }
+        return Result(text: text, words: bounded, duration: duration,
+                      processingTime: Date().timeIntervalSince(started))
+    }
+}
+
+#if os(WASI)
+/// Samples pulled from the JavaScript host a chunk at a time.
+///
+/// The point is what it does not hold. A caller who hands over a whole
+/// `Float32Array` pays for the file twice: once in JS and once copied into wasm
+/// memory, which for an hour of audio is 460 MB before the model has allocated
+/// anything. This asks for the next chunk when the pipeline needs it, and the
+/// pipeline releases audio behind the window it is working on, so what stays
+/// resident is a window and a chunk however long the recording is.
+final class PulledAudioStream: AudioStream {
+    /// Asks the host for up to `count` more samples, and returns however many
+    /// it gave. Empty means the source is finished.
+    private let pull: (Int) async throws -> [Float]
+    let totalSamples: Int?
+    private var finished = false
+
+    init(totalSamples: Int?, pull: @escaping (Int) async throws -> [Float]) {
+        self.totalSamples = totalSamples
+        self.pull = pull
+    }
+
+    nonisolated(nonsending) func read(
+        _ count: Int, into buffer: inout [Float]
+    ) async throws -> Int {
+        guard !finished else { return 0 }
+        let chunk = try await pull(count)
+        if chunk.isEmpty { finished = true; return 0 }
+        buffer.append(contentsOf: chunk)
+        return chunk.count
+    }
+}
+
+public extension Voz {
+    /// Transcribe audio the host reads in pieces, so neither side holds the
+    /// whole recording: `pull` is asked for the next samples when the pipeline
+    /// wants them and returns nothing when the source is finished.
+    ///
+    /// `duration` is what the container says, for progress reporting only.
+    @_spi(VozWeb)
+    func transcribe(
+        duration: TimeInterval, totalSamples: Int?,
+        pull: @escaping (Int) async throws -> [Float],
+        progress: @Sendable (Progress) -> Void = { _ in }
+    ) async throws -> Result {
+        try await transcribe(stream: PulledAudioStream(totalSamples: totalSamples, pull: pull),
+                             duration: duration, progress: progress)
+    }
+
+    /// Build a recogniser from sidecars the browser already fetched, running
+    /// the models through the JavaScript host on `globalThis.__vozHost`.
+    ///
+    /// `@_spi` rather than public API: the wasm entry point is the only caller,
+    /// and the shape of this depends on how the host compiles its models.
+    @_spi(VozWeb)
+    static func web(meta: Data, vocab: Data, embedding: Data, lanes: Int,
+                    batch: Int, fused: Bool) async throws -> Voz {
+        guard lanes > 0, batch > 0 else {
+            throw VozError.invalidModel("lane and batch counts must be positive")
+        }
+        let assets = try Assets(meta: meta, vocab: vocab, embeddingBytes: embedding)
+        let buffers = try PipelineBuffers(configuration: assets.configuration, lanes: lanes,
+                                          batch: batch)
+        let engine = try WasmEngine(configuration: assets.configuration, lanes: lanes,
+                                    batch: batch, fused: fused)
+        return Voz(assets: assets, engine: engine, buffers: buffers)
+    }
+}
+#endif

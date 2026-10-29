@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#MISE description="Verify the README table and the model pages match manifest.json"
+#MISE dir="{{config_root}}"
+#MISE tools={node="22"}
+source "$MISE_PROJECT_ROOT/Tools/dal.sh"
+
+# Generated blocks that nothing checks go stale between releases. This fails the
+# PR rather than committing a fix silently.
+
+node --input-type=module <<'NODE'
+import { readFileSync } from "node:fs";
+import { renderAll } from "./Tools/manifest-docs.mjs";
+
+const stale = Object.entries(renderAll())
+  .filter(([path, text]) => readFileSync(path, "utf8") !== text)
+  .map(([path]) => path);
+
+if (stale.length) {
+  console.error(`error: stale generated blocks in ${stale.join(", ")}. Run \`mise run docs:render\`.`);
+  process.exit(1);
+}
+console.log("README.md and the model pages are current");
+NODE

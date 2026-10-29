@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Linking,
   ActivityIndicator,
   Pressable,
   ScrollView,
@@ -34,6 +35,7 @@ import { canRecordWith, recordTranscribe } from '../asr/recordTranscribe';
 import { cloudMissing } from '../asr/cloud';
 import { prepareModel, isInstalled } from '../asr';
 import { downloadNemo, nemoInstalled } from '../asr/nemo';
+import { downloadVoz, vozInstalled, VOZ_CREDIT } from '../asr/voz';
 import { downloadSherpa, sherpaInstalled, sherpaModelById } from '../asr/sherpa';
 import {
   buildSpeakerTurns,
@@ -161,6 +163,12 @@ export function RecordScreen({ language, recordModel, onPickModel, onSaved, onBu
       if (!(await nemoInstalled(m.nemo))) {
         setStatus('Downloading model');
         await downloadNemo(m.nemo, setProgress);
+        setProgress(0);
+      }
+    } else if (m.kind === 'voz') {
+      if (!(await vozInstalled())) {
+        setStatus('Downloading model');
+        await downloadVoz(setProgress);
         setProgress(0);
       }
     } else if (m.kind === 'sherpa' && m.sherpaId) {
@@ -493,6 +501,9 @@ export function RecordScreen({ language, recordModel, onPickModel, onSaved, onBu
           </Text>
           <Ionicons name="chevron-forward" size={14} color={theme.textFaint} />
         </Pressable>
+        {recordModel?.kind === 'voz' && <Text style={styles.vozCredit} onPress={() => Linking.openURL('https://desertant.com')}>
+            {VOZ_CREDIT}
+          </Text>}
 
         {diarizationSupported && (
           <View style={styles.diarRow}>
@@ -628,6 +639,7 @@ const styles = StyleSheet.create({
   ctaText: { color: theme.text, fontSize: 16, fontWeight: '600' },
   modelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   modelText: { color: theme.textFaint, fontSize: 14, fontWeight: '500' },
+  vozCredit: { color: theme.textFaint, fontSize: 12, textAlign: 'center' },
   diarRow: {
     flexDirection: 'row',
     alignItems: 'center',

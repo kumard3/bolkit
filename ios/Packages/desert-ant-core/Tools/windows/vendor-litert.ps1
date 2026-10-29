@@ -1,0 +1,62 @@
+# Vendor libLiteRt.dll for Windows x64 into Vendor/litert/lib/windows-x64. The
+# runtime ships in the ai-edge-litert PyPI wheel; the win_amd64 wheel carries
+# libLiteRt.dll at ai_edge_litert/. Windows additionally needs an import library
+# (LiteRt.lib) generated from the DLL's export table, because link.exe cannot
+# link against a bare DLL; that step needs dumpbin/lib from an MSVC developer
+# environment (CI: ilammy/msvc-dev-cmd).
+#
+# This is the CI path only, and it is a second implementation of what
+# dal_vendor_litert in Tools/dal.sh now does on a Windows host - with pip
+# instead of uv, and with dumpbin/lib instead of the llvm-readobj and llvm-lib
+# that ship in the Swift toolchain. Keep the two in step, or fold the Windows
+# job in .github/workflows/ci.yml onto mise and delete this file.
+$ErrorActionPreference = "Stop"
+
+$version = if ($env:DAL_LITERT_VERSION) { $env:DAL_LITERT_VERSION } else { "2.2.0" }
+$dest = "Vendor/litert/lib/windows-x64"
+
+if ((Test-Path "$dest/libLiteRt.dll") -and (Test-Path "$dest/LiteRt.lib")) {
+    Write-Host "LiteRT $version already vendored at $dest"
+    exit 0
+}
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Path $tmp | Out-Null
+try {
+    Write-Host "Fetching ai-edge-litert $version (win_amd64 libLiteRt.dll, one-time)..."
+    $download = pip download "ai-edge-litert==$version" --only-binary=:all: --no-deps -d $tmp 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        # The wheel exists for a few Python versions only; a newer Python finds nothing and pip says so tersely.
+        $download | ForEach-Object { Write-Host $_ }
+        $python = (& python --version 2>&1) -join " "
+        throw "no ai-edge-litert $version wheel for $python; use a Python the wheel is built for (3.12 works)"
+    }
+
+    $whl = Get-ChildItem $tmp -Filter *.whl | Select-Object -First 1
+    if (-not $whl) { throw "no wheel downloaded" }
+    # Windows PowerShell 5.1's Expand-Archive takes .zip only (PowerShell 7 does not care), so the wheel is copied to that name.
+    Copy-Item $whl.FullName "$tmp/wheel.zip"
+    Expand-Archive "$tmp/wheel.zip" -DestinationPath "$tmp/whl"
+
+    $dll = "$tmp/whl/ai_edge_litert/libLiteRt.dll"
+    if (-not (Test-Path $dll)) { throw "libLiteRt.dll is not in the ai-edge-litert wheel" }
+    Copy-Item $dll "$dest/libLiteRt.dll"
+
+    # Import library: dump the DLL's exports into a .def, then lib /def. The
+    # LIBRARY statement pins the loader to the vendored DLL name.
+    $exports = & dumpbin /exports "$dest/libLiteRt.dll"
+    if ($LASTEXITCODE -ne 0) { throw "dumpbin failed (run from an MSVC developer environment)" }
+    $names = $exports | ForEach-Object {
+        if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)') { $Matches[1] }
+    } | Where-Object { $_ }
+    if (-not $names) { throw "no exports found in libLiteRt.dll" }
+
+    @("LIBRARY libLiteRt.dll", "EXPORTS") + $names | Set-Content "$tmp/LiteRt.def"
+    & lib "/def:$tmp/LiteRt.def" /machine:x64 "/out:$dest/LiteRt.lib" /nologo
+    if ($LASTEXITCODE -ne 0) { throw "lib.exe failed" }
+
+    Write-Host "Vendored LiteRT $version -> $dest ($($names.Count) exports)"
+} finally {
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}

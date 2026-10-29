@@ -29,12 +29,15 @@ import {
   installedLLMStorageBytes,
 } from '../asr/llm';
 import { cloudChatLabel, cloudChatReady } from '../asr/cloud';
+import { deleteVoz, downloadVoz, vozInstalled } from '../asr/voz';
 import { clearHistory } from '../history';
 import { clearUsage } from '../util/usage';
 import {
   getCloud,
   getLLMModelId,
+  getRecordModelId,
   getSelectedModelId,
+  setRecordModelId,
   setCloud,
   setLLMModelId,
   setSelectedModelId,
@@ -61,6 +64,7 @@ type Props = {
 export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) {
   const catalog = buildCatalog();
   const [selectedId, setSelectedId] = useState(getSelectedModelId());
+  const [recordId, setRecordId] = useState(getRecordModelId());
   const [installed, setInstalled] = useState<Record<string, boolean>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, number>>({});
@@ -74,17 +78,23 @@ export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) 
   useEffect(() => {
     if (!visible) return;
     setSelectedId(getSelectedModelId());
+    setRecordId(getRecordModelId());
     setAiId(getLLMModelId());
     setCfg(getCloud());
     const map: Record<string, boolean> = {};
     for (const m of catalog) {
       if (m.kind === 'whisper' && m.whisper) map[m.id] = isInstalled(m.whisper);
       else if (m.kind === 'llm' && m.llm) map[m.id] = llmInstalled(m.llm);
-      else if (m.kind === 'nemo') map[m.id] = false;
+      else if (m.kind === 'nemo' || m.kind === 'voz') map[m.id] = false;
       else map[m.id] = true;
     }
     setInstalled(map);
     (async () => {
+      const voz = catalog.find((m) => m.kind === 'voz');
+      if (voz) {
+        const ok = await vozInstalled();
+        setInstalled((s) => ({ ...s, [voz.id]: ok }));
+      }
       for (const m of catalog) {
         if (m.kind === 'nemo' && m.nemo) {
           const ok = await nemoInstalled(m.nemo);
@@ -95,6 +105,14 @@ export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) 
   }, [visible]);
 
   function choose(m: CatalogModel) {
+    if (m.kind === 'voz') {
+      setRecordModelId(m.id);
+      setRecordId(m.id);
+      onChanged();
+      return;
+    }
+    setRecordModelId('');
+    setRecordId('');
     setSelectedModelId(m.id);
     setSelectedId(m.id);
     onChanged();
@@ -107,7 +125,7 @@ export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) 
   }
 
   async function getModel(m: CatalogModel) {
-    if (m.kind !== 'whisper' && m.kind !== 'nemo' && m.kind !== 'llm') return;
+    if (m.kind !== 'whisper' && m.kind !== 'nemo' && m.kind !== 'llm' && m.kind !== 'voz') return;
     setError(null);
     setBusyId(m.id);
     setProgress((p) => ({ ...p, [m.id]: 0 }));
@@ -118,6 +136,7 @@ export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) 
       if (m.kind === 'whisper' && m.whisper) await downloadModel(m.whisper, onR, ctrl.signal);
       else if (m.kind === 'nemo' && m.nemo) await downloadNemo(m.nemo, onR, ctrl.signal);
       else if (m.kind === 'llm' && m.llm) await downloadLLM(m.llm, onR, ctrl.signal);
+      else if (m.kind === 'voz') await downloadVoz(onR, ctrl.signal);
       setInstalled((s) => ({ ...s, [m.id]: true }));
       // The LLM is a post-processor, not a transcription engine, installing it
       // must not change the selected voice model.
@@ -141,7 +160,7 @@ export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) 
   }
 
   function removeModel(m: CatalogModel) {
-    if (m.kind !== 'whisper' && m.kind !== 'nemo' && m.kind !== 'llm') return;
+    if (m.kind !== 'whisper' && m.kind !== 'nemo' && m.kind !== 'llm' && m.kind !== 'voz') return;
     Alert.alert('Remove model', `Delete this download (${m.sizeLabel})?`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -151,8 +170,15 @@ export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) 
           if (m.kind === 'whisper' && m.whisper) deleteModel(m.whisper);
           else if (m.kind === 'nemo' && m.nemo) deleteNemo(m.nemo);
           else if (m.kind === 'llm' && m.llm) deleteLLM(m.llm);
+          else if (m.kind === 'voz') void deleteVoz();
           setInstalled((s) => ({ ...s, [m.id]: false }));
-          if (selectedId === m.id) choose(catalog[0]);
+          if (m.kind === 'voz') {
+            if (recordId === m.id) {
+              setRecordModelId('');
+              setRecordId('');
+              onChanged();
+            }
+          } else if (selectedId === m.id) choose(catalog[0]);
           setTick((t) => t + 1);
         },
       },
@@ -219,11 +245,11 @@ export function ModelsModal({ visible, onClose, onChanged, onWipeData }: Props) 
 
   function Row({ m, card }: { m: CatalogModel; card?: boolean }) {
     const isLLM = m.kind === 'llm';
-    const isSel = isLLM ? aiId === m.llm?.id : selectedId === m.id;
+    const isSel = isLLM ? aiId === m.llm?.id : m.kind === 'voz' ? recordId === m.id : selectedId === m.id;
     const isDl = busyId === m.id;
     const pct = Math.round((progress[m.id] ?? 0) * 100);
     const have = installed[m.id];
-    const downloadable = m.kind === 'whisper' || m.kind === 'nemo' || isLLM;
+    const downloadable = m.kind === 'whisper' || m.kind === 'nemo' || m.kind === 'voz' || isLLM;
     const name = m.title ?? m.label;
     const desc = m.tagline ?? m.note;
     const chip = m.chip ?? (m.live ? 'Real-time' : 'After recording');
