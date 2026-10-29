@@ -1,7 +1,6 @@
 import AVFoundation
+import BolkitCore
 import Speech
-
-struct Word: Sendable { let text: String; let start: Double; let end: Double }
 
 struct SpeechError: LocalizedError {
   let errorDescription: String?

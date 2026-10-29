@@ -77,3 +77,4 @@ mac/mas
 mac/.swiftpm
 apple/Bolkit.xcodeproj/
 .build/
+apple/BolkitCore/Vendor/

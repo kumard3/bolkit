@@ -17,21 +17,30 @@ struct ModelsView: View {
           if installing { ProgressView().tint(.white) } else { Label("Download language", systemImage: "arrow.down.circle") }
         }.disabled(installing).foregroundStyle(.white)
       }
-      Text("Other engines arrive in the next update. Until then every choice runs on Apple Speech.").font(.footnote).foregroundStyle(Mono.faint)
     }
   }
 
   func picker(_ title: String, selected: String, set: @escaping (String) -> Void) -> some View {
     Card {
       Text(title).font(.footnote).foregroundStyle(Mono.faint)
-      ForEach(dictationModels) { x in
-        Button { set(x.id) } label: {
-          HStack {
-            Row(title: x.title, sub: x.note, trailing: x.ready ? x.size : "Soon")
+      ForEach(catalog) { x in
+        let on = m.models.installed(x)
+        HStack(spacing: 10) {
+          Button { if on { set(x.id) } else { Task { await m.models.download(x) } } } label: {
+            Row(title: x.title, sub: m.models.failure[x.id] ?? x.note, trailing: on ? x.sizeLabel : nil)
+          }
+          if let p = m.models.progress[x.id] {
+            Text("\(Int(p * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Mono.dim)
+          } else if !on {
+            Button { Task { await m.models.download(x) } } label: { Image(systemName: "arrow.down.circle") }.foregroundStyle(.white)
+          } else {
+            if x.kind == .whisper || x.kind == .voz || x.kind == .parakeet {
+              Button { m.models.delete(x); if selected == x.id { set("system") } } label: { Image(systemName: "trash") }.foregroundStyle(Mono.faint)
+            }
             Image(systemName: selected == x.id ? "checkmark.circle.fill" : "circle").foregroundStyle(selected == x.id ? .white : Mono.faint)
           }
         }
-        if x.id != dictationModels.last?.id { Divider().overlay(Mono.border) }
+        if x.id != catalog.last?.id { Divider().overlay(Mono.border) }
       }
     }
   }
@@ -132,13 +141,13 @@ struct Onboarding: View {
         .multilineTextAlignment(.center).foregroundStyle(Mono.dim).padding(.horizontal, 32)
       if step == 2 {
         VStack {
-          ForEach(dictationModels) { x in
-            Button { if x.ready { m.dictationModel = x.id } } label: {
+          ForEach(catalog) { x in
+            Button { if x.kind == .apple { m.dictationModel = x.id } } label: {
               HStack {
-                Row(title: x.title, sub: x.note, trailing: x.ready ? nil : "Soon")
-                if m.dictationModel == x.id && x.ready { Image(systemName: "checkmark.circle.fill") }
+                Row(title: x.title, sub: x.note)
+                if m.dictationModel == x.id && x.kind == .apple { Image(systemName: "checkmark.circle.fill") }
               }.padding(12).background(Mono.surface, in: RoundedRectangle(cornerRadius: 14))
-            }.opacity(x.ready ? 1 : 0.45)
+            }.opacity(x.kind == .apple ? 1 : 0.45)
           }
         }.padding(.horizontal, 20)
       }

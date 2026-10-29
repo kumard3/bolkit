@@ -76,3 +76,10 @@ public func durationLabel(_ sec: Double) -> String {
   let s = max(0, Int(sec.rounded())), m = s / 60
   return m < 60 ? String(format: "%d:%02d", m, s % 60) : "\(m / 60)h \(m % 60)m"
 }
+
+public struct Word: Sendable {
+  public let text: String
+  public let start: Double
+  public let end: Double
+  public init(text: String, start: Double, end: Double) { self.text = text; self.start = start; self.end = end }
+}

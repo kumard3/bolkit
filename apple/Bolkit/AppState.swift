@@ -2,18 +2,6 @@ import AVFoundation
 import BolkitCore
 import SwiftUI
 
-struct ModelInfo: Identifiable {
-  let id: String, title: String, note: String, size: String, ready: Bool
-}
-
-let dictationModels: [ModelInfo] = [
-  .init(id: "system", title: "Apple Speech", note: "Built in. On device, live as you speak.", size: "Built in", ready: true),
-  .init(id: "whisper:oriserve-swift-q8", title: "Hinglish Swift", note: "Whisper tuned for Hinglish and Indian English.", size: "78 MB", ready: false),
-  .init(id: "parakeet", title: "Parakeet", note: "NVIDIA Parakeet on the Neural Engine. English plus 24 European languages.", size: "~500 MB", ready: false),
-  .init(id: "voz", title: "Voz", note: "Powered by Desert Ant Labs. English tuned, word timestamps.", size: "321 MB", ready: false),
-  .init(id: "cloud", title: "Cloud", note: "Azure Speech, Azure OpenAI or any OpenAI compatible API.", size: "Needs key", ready: false),
-]
-
 let languages: [(code: String, name: String)] = [
   ("en-US", "English (US)"), ("en-IN", "English (India)"), ("en-GB", "English (UK)"), ("hi-IN", "Hindi"),
   ("es-ES", "Spanish"), ("fr-FR", "French"), ("de-DE", "German"), ("pt-BR", "Portuguese"), ("it-IT", "Italian"), ("ja-JP", "Japanese"),
@@ -26,6 +14,8 @@ final class AppModel {
   var meetings: [Meeting] = []
   var history: [HistoryItem] = []
   let capture = Capture()
+  let models = ModelStore()
+  @ObservationIgnored let whisper = WhisperEngine()
 
   var dictText = ""
   var dictating = false
@@ -64,12 +54,34 @@ final class AppModel {
 
   var shortLang: String { String(language.prefix(2)) }
 
+  func transcribe(_ file: URL, model id: String) async throws -> [Word] {
+    let info = modelInfo(id)
+    guard info.kind != .apple, models.installed(info) || info.kind == .cloud else {
+      return try await Speech.words(file: file, locale: language, vocab: vocab)
+    }
+    switch info.kind {
+    case .whisper:
+      let samples = try Audio.samples(file)
+      let url = models.url(info), lang = info.forced ?? shortLang, w = whisper
+      return try await Task.detached { try w.transcribe(samples: samples, model: url, language: lang) }.value
+    default:
+      return try await Extra.transcribe(info, file: file, app: self)
+    }
+  }
+
   func toggleDictate() async {
     error = nil
     if dictating { await finishDictation(); return }
     guard await Speech.authorize() else { error = "Microphone or speech permission is off. Turn it on in Settings."; return }
     do {
       dictText = ""
+      let info = modelInfo(dictationModel)
+      if !info.live && models.installed(info) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("dictation.wav")
+        try capture.start(to: url)
+        dictating = true
+        return
+      }
       let live = try await Speech.live(locale: language, vocab: vocab) { [weak self] t in Task { @MainActor in self?.dictText = t } }
       liveSession = live
       try capture.start(to: nil) { live.accept($0) }
@@ -80,9 +92,16 @@ final class AppModel {
   func finishDictation() async {
     capture.stop()
     dictating = false
-    guard let live = liveSession else { return }
-    liveSession = nil
-    var t = await live.finish().trimmingCharacters(in: .whitespacesAndNewlines)
+    var t: String
+    if let live = liveSession {
+      liveSession = nil
+      t = await live.finish().trimmingCharacters(in: .whitespacesAndNewlines)
+    } else {
+      busy = true
+      defer { busy = false }
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("dictation.wav")
+      do { t = try await transcribe(url, model: dictationModel).map(\.text).joined(separator: " ") } catch { self.error = error.localizedDescription; return }
+    }
     if autoPolish { t = polish(t) }
     dictText = t
     guard !t.isEmpty else { return }
@@ -120,7 +139,7 @@ final class AppModel {
     defer { busy = false }
     var turns: [Turn] = []
     do {
-      let words = try await Speech.words(file: store.audioURL(id), locale: language, vocab: vocab)
+      let words = try await transcribe(store.audioURL(id), model: meetingModel)
       turns = Digest.turns(from: words.map { ($0.text, $0.start, $0.end) })
     } catch { self.error = "Saved the audio, but transcription failed: \(error.localizedDescription)" }
     let text = turns.map(\.text).joined(separator: " ")
@@ -148,7 +167,7 @@ final class AppModel {
     let dir = URL.documentsDirectory
     let wav = dir.appendingPathComponent("selftest.wav")
     guard FileManager.default.fileExists(atPath: wav.path) else { return }
-    var out: [String: Any] = ["os": ProcessInfo.processInfo.operatingSystemVersionString]
+    var out: [String: Any] = ["os": ProcessInfo.processInfo.operatingSystemVersionString, "ran": Date().timeIntervalSince1970]
     let t0 = Date()
     do {
       let words = try await Speech.words(file: wav, locale: language, vocab: [])
@@ -168,6 +187,15 @@ final class AppModel {
       out["liveText"] = await live.finish()
       out["partial"] = last.value
     } catch { out["liveError"] = error.localizedDescription }
+    var engines: [String: Any] = [:]
+    for info in catalog where info.kind != .apple && (models.installed(info) || info.kind == .cloud) {
+      let t = Date()
+      do {
+        let words = try await transcribe(wav, model: info.id)
+        engines[info.id] = ["text": words.map(\.text).joined(separator: " "), "seconds": Date().timeIntervalSince(t), "words": words.count]
+      } catch { engines[info.id] = ["error": error.localizedDescription] }
+    }
+    out["engines"] = engines
     try? JSONSerialization.data(withJSONObject: out, options: .prettyPrinted).write(to: dir.appendingPathComponent("selftest.json"))
     print("SELFTEST", out)
   }
