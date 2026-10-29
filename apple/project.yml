@@ -1,0 +1,38 @@
+name: Bolkit
+options:
+  bundleIdPrefix: ai.localvoice
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+packages:
+  BolkitCore:
+    path: BolkitCore
+targets:
+  Bolkit:
+    type: application
+    platform: iOS
+    sources: [Bolkit]
+    dependencies:
+      - package: BolkitCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.localvoice.native
+        PRODUCT_NAME: Bolkit
+        DEVELOPMENT_TEAM: Q84L632A4A
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Bolkit Dev
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIUserInterfaceStyle: Dark
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Bolkit listens to your voice to turn it into text.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Bolkit uses on-device speech recognition to write what you say.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    info:
+      path: Bolkit/Info.plist
+      properties:
+        UIBackgroundModes: [audio]

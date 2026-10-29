@@ -75,3 +75,5 @@ AGENTS.md
 brag-output/
 mac/mas
 mac/.swiftpm
+apple/Bolkit.xcodeproj/
+.build/
