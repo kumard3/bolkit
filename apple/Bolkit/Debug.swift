@@ -24,7 +24,7 @@ final class PreviewHost: KeyboardHost {
   var before: String { text }
   var returnType = UIReturnKeyType.default
   var autocap = UITextAutocapitalizationType.none
-  var appearance = UIKeyboardAppearance.default
+  var appearance = UserDefaults.standard.bool(forKey: "keyboardLight") ? UIKeyboardAppearance.light : .default
   func insert(_ s: String) { text += s }
   func delete() { if !text.isEmpty { text.removeLast() } }
   func move(_ n: Int) {}

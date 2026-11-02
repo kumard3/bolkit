@@ -171,7 +171,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
         var tint = p.text
         var title: String?
         var symbol: String?
-        var size: CGFloat = 18
+        var size: CGFloat = 17
         switch k.kind {
         case .char(let c): title = shift == .off ? c : c.uppercased(); size = 27
         case .space: title = nil
@@ -467,7 +467,7 @@ final class SuggestionBar: UIView {
     super.init(frame: frame)
     for _ in 0..<3 {
       let b = UIButton(type: .custom)
-      b.titleLabel?.font = .systemFont(ofSize: 21)
+      b.titleLabel?.font = .systemFont(ofSize: 20)
       b.titleLabel?.lineBreakMode = .byTruncatingTail
       b.addAction(UIAction { [weak self, weak b] _ in if let t = b?.title(for: .normal), !t.isEmpty { self?.pick?(t) } }, for: .touchUpInside)
       addSubview(b)
