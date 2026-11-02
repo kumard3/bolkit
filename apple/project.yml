@@ -16,6 +16,8 @@ settings:
 packages:
   BolkitCore:
     path: BolkitCore
+  SherpaKit:
+    path: SherpaKit
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio.git
     revision: 19600a485baa4998812e4654b70d2bab8f2c9949
@@ -29,8 +31,7 @@ targets:
     sources: [Bolkit]
     dependencies:
       - package: BolkitCore
-      - package: BolkitCore
-        product: SherpaKit
+      - package: SherpaKit
       - package: FluidAudio
       - package: DesertAnt
         product: Voz

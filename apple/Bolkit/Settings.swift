@@ -35,26 +35,42 @@ struct ModelsView: View {
   }
 
   func picker(_ title: String, selected: String, set: @escaping (String) -> Void) -> some View {
-    Card {
+    let all = catalog.filter { $0.kind != .speakers }
+    let mine = all.filter { $0.id == "system" || $0.id == selected || m.models.installed($0) || m.models.progress[$0.id] != nil }
+    let rest = all.filter { x in !mine.contains { $0.id == x.id } }
+    return Card {
       Text(title).font(.footnote).foregroundStyle(Mono.faint)
-      ForEach(catalog.filter { $0.kind != .speakers }) { x in
-        let on = m.models.installed(x)
-        HStack(spacing: 10) {
-          Button { if on { set(x.id) } else if x.kind == .cloud { m.tab = 4 } else { Task { await m.models.download(x) } } } label: {
-            Row(title: x.title, sub: m.models.failure[x.id] ?? x.note, trailing: on ? x.sizeLabel : x.kind == .cloud ? "Add key" : nil, badge: x.id == "system" ? "Suggested" : nil)
+      ForEach(mine) { x in
+        modelRow(x, selected: selected, set: set)
+        if x.id != mine.last?.id { Divider().overlay(Mono.border) }
+      }
+      if !rest.isEmpty {
+        Divider().overlay(Mono.border)
+        DisclosureGroup("More models (\(rest.count))") {
+          ForEach(rest) { x in
+            modelRow(x, selected: selected, set: set)
+            if x.id != rest.last?.id { Divider().overlay(Mono.border) }
           }
-          if let p = m.models.progress[x.id] {
-            Text("\(Int(p * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Mono.dim)
-          } else if !on && x.kind != .cloud {
-            Button { Task { await m.models.download(x) } } label: { Image(systemName: "arrow.down.circle") }.foregroundStyle(.white)
-          } else {
-            if x.kind == .whisper || x.kind == .voz || x.kind == .parakeet || x.kind == .sherpa {
-              Button { m.models.delete(x); if selected == x.id { set("system") } } label: { Image(systemName: "trash") }.foregroundStyle(Mono.faint)
-            }
-            Image(systemName: selected == x.id ? "checkmark.circle.fill" : "circle").foregroundStyle(selected == x.id ? .white : Mono.faint)
-          }
+        }.foregroundStyle(Mono.dim)
+      }
+    }
+  }
+
+  func modelRow(_ x: ModelInfo, selected: String, set: @escaping (String) -> Void) -> some View {
+    let on = m.models.installed(x)
+    return HStack(spacing: 10) {
+      Button { if on { set(x.id) } else if x.kind == .cloud { m.tab = 4 } else { Task { await m.models.download(x) } } } label: {
+        Row(title: x.title, sub: m.models.failure[x.id] ?? x.note, trailing: on ? x.sizeLabel : x.kind == .cloud ? "Add key" : nil, badge: x.id == "system" ? "Suggested" : nil)
+      }
+      if let p = m.models.progress[x.id] {
+        Text("\(Int(p * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Mono.dim)
+      } else if !on && x.kind != .cloud {
+        Button { Task { await m.models.download(x) } } label: { Image(systemName: "arrow.down.circle") }.foregroundStyle(.white)
+      } else {
+        if x.kind == .whisper || x.kind == .voz || x.kind == .parakeet || x.kind == .sherpa {
+          Button { m.models.delete(x); if selected == x.id { set("system") } } label: { Image(systemName: "trash") }.foregroundStyle(Mono.faint)
         }
-        if x.id != catalog.last?.id { Divider().overlay(Mono.border) }
+        Image(systemName: selected == x.id ? "checkmark.circle.fill" : "circle").foregroundStyle(selected == x.id ? .white : Mono.faint)
       }
     }
   }
