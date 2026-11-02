@@ -59,6 +59,13 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown]
         CFBundleURLTypes:
           - CFBundleURLSchemes: [scribe]
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: dictate
+            UIApplicationShortcutItemTitle: Start dictation
+            UIApplicationShortcutItemIconSymbolName: mic
+          - UIApplicationShortcutItemType: history
+            UIApplicationShortcutItemTitle: History
+            UIApplicationShortcutItemIconSymbolName: clock
   BolkitKeyboard:
     type: app-extension
     platform: iOS

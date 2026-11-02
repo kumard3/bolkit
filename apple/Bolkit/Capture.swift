@@ -33,6 +33,7 @@ final class Capture {
   private(set) var levels: [Float] = []
 
   nonisolated static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+  nonisolated(unsafe) static let wav: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false]
   @ObservationIgnored private let engine = AVAudioEngine()
   @ObservationIgnored private let box = Box()
   @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -53,7 +54,7 @@ final class Capture {
     try session.setActive(true)
     box.lock.withLock {
       box.file = url.flatMap {
-        try? AVAudioFile(forWriting: $0, settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16000, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false], commonFormat: .pcmFormatFloat32, interleaved: false)
+        try? AVAudioFile(forWriting: $0, settings: Capture.wav, commonFormat: .pcmFormatFloat32, interleaved: false)
       }
       box.frames = 0
       box.live = true

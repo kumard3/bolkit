@@ -7,6 +7,11 @@ let languages: [(code: String, name: String)] = [
   ("es-ES", "Spanish"), ("fr-FR", "French"), ("de-DE", "German"), ("pt-BR", "Portuguese"), ("it-IT", "Italian"), ("ja-JP", "Japanese"),
 ]
 
+let targets: [(code: String, name: String)] = [
+  ("en", "English"), ("hi", "Hindi"), ("es", "Spanish"), ("fr", "French"), ("de", "German"), ("pt-BR", "Portuguese"),
+  ("it", "Italian"), ("ja", "Japanese"), ("ko", "Korean"), ("zh-Hans", "Chinese"), ("ar", "Arabic"), ("ru", "Russian"),
+]
+
 @MainActor @Observable
 final class AppModel {
   let store = Store()
@@ -18,6 +23,9 @@ final class AppModel {
   @ObservationIgnored let whisper = WhisperEngine()
 
   var dictText = ""
+  var dictID: String?
+  var showHistory = false
+  var translateTick = 0
   var dictating = false
   var copyOnFinish = false
   var busy = false
@@ -45,6 +53,8 @@ final class AppModel {
   var language: String { get { settings.string("language", "en-US") } set { settings.set("language", newValue) } }
   var yourName: String { get { settings.string("yourName") } set { settings.set("yourName", newValue) } }
   var autoPolish: Bool { get { settings.bool("autoPolish") } set { settings.set("autoPolish", newValue) } }
+  var translateTarget: String { get { settings.string("translateTarget") } set { settings.set("translateTarget", newValue) } }
+  var smartCorrections: Bool { get { settings.bool("smartCorrections", true) } set { settings.set("smartCorrections", newValue) } }
   var onboarded: Bool { get { settings.bool("onboarded") } set { settings.set("onboarded", newValue) } }
   var dictationModel: String { get { settings.string("selectedModelId", "system") } set { settings.set("selectedModelId", newValue) } }
   var meetingModel: String { get { settings.string("recordModelId", "system").ifEmpty("system") } set { settings.set("recordModelId", newValue) } }
@@ -105,26 +115,104 @@ final class AppModel {
       let url = FileManager.default.temporaryDirectory.appendingPathComponent("dictation.wav")
       do { t = try await transcribe(url, model: dictationModel).map(\.text).joined(separator: " ") } catch { self.error = error.localizedDescription; return }
     }
-    if autoPolish { t = polish(t) }
+    t = Polish.edits(t)
+    if smartCorrections { t = await Brain.correct(t) }
+    t = Polish.commands(t)
+    if autoPolish { t = Polish.polish(t) }
     dictText = t
+    dictID = nil
     guard !t.isEmpty else { return }
     if copyOnFinish {
       copyOnFinish = false
       UIPasteboard.general.string = t
     }
-    history.insert(HistoryItem(text: t, language: shortLang), at: 0)
+    let item = HistoryItem(text: t, language: shortLang)
+    dictID = item.id
+    history.insert(item, at: 0)
+    store.saveHistory(history)
+    if !translateTarget.isEmpty { translateTick += 1 }
+  }
+
+  func saveTranslation(_ text: String, to code: String) {
+    var item = HistoryItem(text: text, language: code)
+    item.translated = true
+    item.translatedTo = code
+    history.insert(item, at: 0)
+    store.saveHistory(history)
+    open(item)
+  }
+
+  func polishDictation() async {
+    setDictText(await Brain.polish(dictText, vocab: vocab) ?? Polish.polish(dictText))
+  }
+
+  func summarizeDictation() async {
+    let s = await Brain.summarize(dictText) ?? Digest.summary(dictText)
+    guard !s.isEmpty else { return }
+    let item = HistoryItem(text: s, language: shortLang)
+    history.insert(item, at: 0)
+    store.saveHistory(history)
+    open(item)
+  }
+
+  func setDictText(_ t: String) {
+    dictText = t
+    guard let id = dictID, let i = history.firstIndex(where: { $0.id == id }) else { return }
+    history[i].text = t
     store.saveHistory(history)
   }
 
-  func polish(_ s: String) -> String {
-    guard let f = s.first else { return s }
-    let t = f.uppercased() + s.dropFirst()
-    return t.last.map { ".!?".contains($0) } == true ? t : t + "."
+  func open(_ h: HistoryItem) {
+    dictText = h.text
+    dictID = h.id
   }
 
   func deleteHistory(_ id: String) {
     history.removeAll { $0.id == id }
+    if dictID == id { dictID = nil }
     store.saveHistory(history)
+  }
+
+  func clearHistory() {
+    history = []
+    dictID = nil
+    store.saveHistory([])
+  }
+
+  var canDeleteAll: Bool { !dictating && !busy && recordingID == nil }
+
+  func deleteAll() {
+    guard canDeleteAll else { return }
+    Task { await Engines.shared.dropVoz(); await Engines.shared.dropParakeet() }
+    let fm = FileManager.default
+    for dir in [URL.documentsDirectory, URL.applicationSupportDirectory] {
+      for u in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] { try? fm.removeItem(at: u) }
+    }
+    for k in ["openai", "azureSpeech", "azureOpenAI"] { Keychain.set(k, "") }
+    settings = store.settings()
+    dictText = ""
+    dictID = nil
+    models.installedTick += 1
+    reload()
+  }
+
+  func importAudio(_ src: URL) async {
+    error = nil
+    let id = Store.newID(), dst = store.audioURL(id)
+    let scoped = src.startAccessingSecurityScopedResource()
+    defer { if scoped { src.stopAccessingSecurityScopedResource() } }
+    busy = true
+    do {
+      try FileManager.default.createDirectory(at: store.dir(id), withIntermediateDirectories: true)
+      let dur = try await Task.detached { try Audio.convert(src, to: dst) }.value
+      await finishMeeting(id, duration: dur, title: src.deletingPathExtension().lastPathComponent)
+      openID = id
+      tab = 2
+    } catch {
+      store.delete(id)
+      busy = false
+      self.error = "Could not import that file. \(error.localizedDescription)"
+    }
   }
 
   func startRecording() async {
@@ -147,7 +235,7 @@ final class AppModel {
     tab = 2
   }
 
-  func finishMeeting(_ id: String, duration dur: Double) async {
+  func finishMeeting(_ id: String, duration dur: Double, title: String? = nil) async {
     busy = true
     defer { busy = false }
     var turns: [Turn] = []
@@ -160,10 +248,11 @@ final class AppModel {
         segs = ((try? await Engines.shared.diarize(samples)) ?? []).map { ($0.start, $0.end, $0.speaker) }
       }
       turns = Digest.turns(from: words, segments: segs)
+      if autoPolish { turns = turns.map { var t = $0; t.text = Polish.polish(t.text); return t } }
     } catch { self.error = "Saved the audio, but transcription failed: \(error.localizedDescription)" }
     let text = turns.map(\.text).joined(separator: " ")
     let created = Double(id.split(separator: "-").first.flatMap { Int($0) } ?? Int(Date().timeIntervalSince1970 * 1000))
-    var m = Meeting(id: id, title: Meeting.defaultTitle(Date(timeIntervalSince1970: created / 1000)), createdAt: created, durationSec: dur.rounded(), language: shortLang, transcript: text, turns: turns, hasAudio: true)
+    var m = Meeting(id: id, title: title ?? Meeting.defaultTitle(Date(timeIntervalSince1970: created / 1000)), createdAt: created, durationSec: dur.rounded(), language: shortLang, transcript: text, turns: turns, hasAudio: true)
     if !text.isEmpty { m.summary = Digest.summary(text); m.decisions = Digest.decisions(text) }
     if let n = yourName.nilIfEmpty, m.turns?.isEmpty == false { m.speakerNames = ["0": n] }
     await Brain.enrich(&m, vocab: vocab, you: yourName)

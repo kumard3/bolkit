@@ -74,7 +74,10 @@ struct SettingsView: View {
   @State private var provider = "openai"
   @State private var name = ""
   @State private var polish = false
+  @State private var smart = true
+  @State private var wipe = false
   @State private var lang = "en-US"
+  @State private var target = ""
   @State private var fields: [String: String] = [:]
 
   var body: some View {
@@ -82,9 +85,20 @@ struct SettingsView: View {
       Card {
         Text("You").font(.footnote).foregroundStyle(Mono.faint)
         TextField("Your name", text: $name).onSubmit { m.yourName = name }.foregroundStyle(.white)
-        Picker("Language", selection: $lang) { ForEach(languages, id: \.code) { Text($0.name).tag($0.code) } }
-          .onChange(of: lang) { m.language = lang }
+        LabeledContent("Language") {
+          Picker("Language", selection: $lang) { ForEach(languages, id: \.code) { Text($0.name).tag($0.code) } }.labelsHidden()
+        }.onChange(of: lang) { m.language = lang }
+        LabeledContent("Translate to") {
+          Picker("Translate to", selection: $target) {
+            Text("Off").tag("")
+            ForEach(targets, id: \.code) { Text($0.name).tag($0.code) }
+          }.labelsHidden()
+        }.onChange(of: target) { m.translateTarget = target }
         Toggle("Auto polish", isOn: $polish).onChange(of: polish) { m.autoPolish = polish }
+        Toggle(isOn: $smart) {
+          Text("Smart corrections")
+          Text(Brain.available ? "Understands \"no wait\" and \"actually\"." : "Needs Apple Intelligence.")
+        }.onChange(of: smart) { m.smartCorrections = smart }
       }
       Card {
         Text("Vocabulary").font(.footnote).foregroundStyle(Mono.faint)
@@ -115,18 +129,27 @@ struct SettingsView: View {
         Row(title: "Words dictated", trailing: "\(m.history.reduce(0) { $0 + $1.text.split(separator: " ").count })")
       }
       Card {
+        Button("Delete all data", role: .destructive) { wipe = true }.disabled(!m.canDeleteAll)
+        Text("Removes every dictation, meeting, model and key from this iPhone.").font(.caption).foregroundStyle(Mono.faint)
+      }
+      Card {
         Text("About").font(.footnote).foregroundStyle(Mono.faint)
         Row(title: "Bolkit", trailing: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
         Text("Voz is powered by Desert Ant Labs.").font(.footnote).foregroundStyle(Mono.dim)
         Text("Everything runs on your phone unless you add a cloud account.").font(.footnote).foregroundStyle(Mono.dim)
       }
     }
-    .onAppear {
-      name = m.yourName; polish = m.autoPolish; lang = m.language; provider = m.cloudProvider
+    .confirmationDialog("Delete all data?", isPresented: $wipe, titleVisibility: .visible) {
+      Button("Delete everything", role: .destructive) { m.deleteAll(); load() }
+    } message: { Text("This cannot be undone.") }
+    .onAppear(perform: load)
+  }
+
+  func load() {
+      name = m.yourName; polish = m.autoPolish; smart = m.smartCorrections; target = m.translateTarget; lang = m.language; provider = m.cloudProvider
       vocabText = m.vocab.joined(separator: ", ")
       for k in ["azureSpeechRegion", "azureOpenAIEndpoint", "azureOpenAITranscribe", "azureOpenAIChat", "cloudBaseUrl", "cloudModel"] { fields[k] = m.text(k) }
       for k in ["openai", "azureSpeech", "azureOpenAI"] { keys[k] = Keychain.get(k) }
-    }
   }
 
   func field(_ title: String, _ key: String) -> some View {

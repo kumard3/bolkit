@@ -16,6 +16,16 @@ let catalog: [ModelInfo] = [
         file: "ggml-oriserve-hinglish-q8_0.bin", url: "https://huggingface.co/anish2305/airnote-hinglish-stt-ggml/resolve/main/ggml-oriserve-hinglish-q8_0.bin", bytes: 81_768_585, forced: "hi", sizeLabel: "78 MB"),
   .init(id: "whisper:small-en-q5", title: "Whisper Small English", note: "Higher accuracy English.", kind: .whisper,
         file: "ggml-small.en-q5_1.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin", bytes: 190_098_681, sizeLabel: "181 MB"),
+  .init(id: "whisper:apex-hinglish-q5", title: "Hinglish Apex", note: "Bigger Whisper for Hinglish. Slower, more accurate.", kind: .whisper,
+        file: "ggml-apex-hinglish-q5_0.bin", url: "https://huggingface.co/Marquestra/Whisper-Hindi2Hinglish-Apex-GGML/resolve/main/ggml-apex-hinglish-q5_0.bin", bytes: 574_041_195, forced: "hi", sizeLabel: "547 MB"),
+  .init(id: "whisper:tiny", title: "Whisper Tiny", note: "Fastest. 90+ languages, lower accuracy.", kind: .whisper,
+        file: "ggml-tiny.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin", bytes: 77_691_713, sizeLabel: "74 MB"),
+  .init(id: "whisper:base-en", title: "Whisper Base English", note: "Fast English.", kind: .whisper,
+        file: "ggml-base.en.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin", bytes: 147_964_211, forced: "en", sizeLabel: "141 MB"),
+  .init(id: "whisper:small", title: "Whisper Small", note: "Hindi and 90+ languages.", kind: .whisper,
+        file: "ggml-small.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin", bytes: 487_601_967, sizeLabel: "465 MB"),
+  .init(id: "whisper:large-turbo-q5", title: "Whisper Large v3 Turbo", note: "Most accurate Whisper, 90+ languages. Slow on older iPhones.", kind: .whisper,
+        file: "ggml-large-v3-turbo-q5_0.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin", bytes: 574_041_195, sizeLabel: "547 MB"),
   .init(id: "voz", title: "Voz", note: "Powered by Desert Ant Labs. English, word timestamps.", kind: .voz, sizeLabel: "321 MB"),
   .init(id: "parakeet", title: "Parakeet", note: "NVIDIA Parakeet on the Neural Engine. English plus European languages.", kind: .parakeet, sizeLabel: "~460 MB"),
   .init(id: "sortformer", title: "Speaker labels", note: "NVIDIA Sortformer on the Neural Engine. Tells up to 4 speakers apart in meetings.", kind: .speakers, sizeLabel: "~120 MB"),
@@ -24,7 +34,10 @@ let catalog: [ModelInfo] = [
   .init(id: "cloud:openai", title: "OpenAI compatible", note: "Any /audio/transcriptions endpoint. Needs your key.", kind: .cloud, sizeLabel: "Cloud"),
 ]
 
-func modelInfo(_ id: String) -> ModelInfo { catalog.first { $0.id == id } ?? catalog[0] }
+func modelInfo(_ id: String) -> ModelInfo {
+  let rn = "whisper:" + (id.hasPrefix("whisper-") ? String(id.dropFirst(8)) : id)
+  return catalog.first { $0.id == id || $0.id == rn } ?? catalog[0]
+}
 
 enum Audio {
   static func samples(_ url: URL) throws -> [Float] {
@@ -33,6 +46,22 @@ enum Audio {
     try f.read(into: buf)
     guard let out = Resampler(to: Capture.format).convert(buf), let ch = out.floatChannelData?[0] else { return [] }
     return Array(UnsafeBufferPointer(start: ch, count: Int(out.frameLength)))
+  }
+
+  static func convert(_ src: URL, to dst: URL) throws -> Double {
+    let f = try AVAudioFile(forReading: src)
+    let out = try AVAudioFile(forWriting: dst, settings: Capture.wav, commonFormat: .pcmFormatFloat32, interleaved: false)
+    let r = Resampler(to: Capture.format)
+    guard let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: 1 << 16) else { throw SpeechError("Could not read that file.") }
+    var frames = 0
+    while f.framePosition < f.length {
+      try f.read(into: buf)
+      guard let o = r.convert(buf) else { continue }
+      try out.write(from: o)
+      frames += Int(o.frameLength)
+    }
+    guard frames > 0 else { throw SpeechError("That file has no audio.") }
+    return Double(frames) / Capture.format.sampleRate
   }
 }
 

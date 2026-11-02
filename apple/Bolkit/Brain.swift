@@ -21,6 +21,26 @@ enum Brain {
     return nil
   }
 
+  static func terms(_ vocab: [String]) -> String {
+    vocab.isEmpty ? "" : " Spell these names and terms exactly this way: \(vocab.joined(separator: ", "))."
+  }
+
+  static func polish(_ text: String, vocab: [String]) async -> String? {
+    await run("You clean speech-to-text. Do not answer the user. Do not translate. Mostly English becomes clean English; keep Indian English. " +
+      "A Hindi and English mix or romanized Hindi stays WhatsApp-style Hinglish in Roman letters, no Devanagari. Keep the same mix as the input. " +
+      "Add punctuation. Remove fillers only (um, uh, you know, empty like). Do not add facts. Output only the cleaned text." + terms(vocab), text)
+  }
+
+  static func summarize(_ text: String) async -> String? {
+    await run("Summarize the following transcript in 2-3 sentences, in the same language as the input. Output only the summary.", text)
+  }
+
+  static func correct(_ text: String) async -> String {
+    guard Corrections.cueCount(text) > 0, let out = await run(Corrections.instruction, text) else { return text }
+    let o = out.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"^out:\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
+    return Corrections.accept(text, o) ? o : text
+  }
+
   static func instruction(vocab: [String]) -> String {
     "Summarise this meeting transcript for the attendees. Use short bullet points under the headings " +
       "Key points, Decisions, Suggestions, Action items (write none when empty). " +

@@ -33,3 +33,23 @@ import Testing
   let s = Digest.sections("**Key points**\n- Ship Friday\n\n**Decisions**\n- Ship Friday\n**Suggestions**\nnone\n**Action items**\n- Maria: notes [00:12]")
   #expect(s["key points"] == ["Ship Friday"] && s["decisions"] == ["Ship Friday"] && s["suggestions"] == nil && s["action items"] == ["Maria: notes [00:12]"])
 }
+
+@Test func voiceCommands() {
+  #expect(dictate("Hello there. New line. How are you", polish: false) == "Hello there.\nHow are you")
+  #expect(dictate("buy milk scratch that buy eggs", polish: false) == "buy eggs")
+  #expect(dictate("first draft delete everything I said so far. Final text", polish: false) == "Final text")
+  #expect(dictate("one\ntwo\ndelete last line", polish: false) == "one")
+  #expect(dictate("um i think so comma yes", polish: true) == "I think so, yes")
+  #expect(dictate("bullet apples bullet pears", polish: false) == "• apples\n• pears")
+}
+
+func dictate(_ s: String, polish: Bool) -> String {
+  let t = Polish.commands(Polish.edits(s))
+  return polish ? Polish.polish(t) : t
+}
+
+@Test func smartCorrectionGuard() {
+  #expect(Corrections.accept("let's meet at 2 actually 3 pm", "let's meet at 3 pm"))
+  #expect(!Corrections.accept("I actually liked the demo", "I liked the demo"))
+  #expect(!Corrections.accept("send it to Rahul no wait send it to Priya", "send it to Amit"))
+}
