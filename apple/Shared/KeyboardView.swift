@@ -6,10 +6,14 @@ import UIKit
   var autocap: UITextAutocapitalizationType { get }
   var appearance: UIKeyboardAppearance { get }
   var keyType: UIKeyboardType { get }
+  var secure: Bool { get }
+  var autocorrect: UITextAutocorrectionType { get }
   func insert(_ s: String)
   func delete()
   func move(_ n: Int)
   var fullAccess: Bool { get }
+  var needsGlobe: Bool { get }
+  func globe()
   func mic()
 }
 
@@ -18,7 +22,7 @@ enum MicState { case ready, listening, working }
 enum Layer { case letters, numbers, symbols }
 
 enum KeyKind: Equatable {
-  case char(String), shift, delete, layer(Layer), mic, space, ret
+  case char(String), shift, delete, layer(Layer), mic, space, ret, clip, globe
 }
 
 final class KeyView: UIView {
@@ -60,13 +64,39 @@ final class KeyView: UIView {
 final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
   var enableInputClicksWhenVisible: Bool { true }
 
-  static let barHeight: CGFloat = 46
-  static let height: CGFloat = barHeight + 6 + 3 * 54 + 43 + 6
-  let side: CGFloat = 6.7, gap: CGFloat = 6.3, rowGap: CGFloat = 11, keyHeight: CGFloat = 43, top: CGFloat = 6
+  static let height: CGFloat = 263
+  let side: CGFloat = 6.7, gap: CGFloat = 6.3
+  var onHeight: ((CGFloat) -> Void)?
+  private var lastHeight: CGFloat = 0
+
+  var forceLandscape = false
+  var landscape: Bool { forceLandscape || bounds.width > 500 }
+  var wantsBar: Bool {
+    guard let h = host else { return true }
+    return !(h.secure || h.autocorrect == .no || [.URL, .emailAddress, .phonePad, .numberPad, .decimalPad].contains(h.keyType))
+  }
+  private var fullBar: CGFloat { wantsBar ? (landscape ? 36 : 46) : 0 }
+  var barHeight: CGFloat { panel.isHidden ? fullBar : 0 }
+  var keyHeight: CGFloat { landscape ? 34 : 43 }
+  var rowGap: CGFloat { landscape ? 8 : 11 }
+  var top: CGFloat { barHeight == 0 ? (landscape ? 6 : 10) : (landscape ? 4 : 6) }
+  private var normalHeight: CGFloat { fullBar + (fullBar == 0 ? (landscape ? 6 : 10) : (landscape ? 4 : 6)) + 4 * keyHeight + 3 * rowGap + 6 }
+  var preferredHeight: CGFloat {
+    guard !panel.isHidden else { return normalHeight }
+    let screen = UIScreen.main.bounds.height
+    return min(normalHeight * 1.5, screen * (landscape ? 0.75 : 0.5))
+  }
+
+  private func updateHeight() {
+    let h = preferredHeight
+    guard abs(h - lastHeight) > 0.5 else { return }
+    lastHeight = h
+    DispatchQueue.main.async { [weak self] in self?.onHeight?(h) }
+  }
 
   weak var host: KeyboardHost?
   private var layer_ = Layer.letters
-  private var built: (UIKeyboardType, UIReturnKeyType, Bool) = (.default, .default, false)
+  private var built: (UIKeyboardType, UIReturnKeyType, Bool, Bool) = (.default, .default, false, true)
   private enum Shift { case off, on, lock }
   private var shift = Shift.off
   private var lastShiftTap = Date.distantPast
@@ -147,11 +177,14 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
     style()
   }
 
+  func rebuild() { build() }
+
   func showClips(_ on: Bool) {
     if on { captureClip() }
     panel.isHidden = !on
     keys.flatMap { $0 }.forEach { $0.isHidden = on }
     bar.clipOn = on
+    setNeedsLayout()
     if on { panel.apply(dark: dark) }
   }
 
@@ -181,18 +214,20 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
     if let image { clips.add(image: image) }
   }
 
-  private var signature: (UIKeyboardType, UIReturnKeyType, Bool) {
-    (host?.keyType ?? .default, host?.returnType ?? .default, !(host?.before.isEmpty ?? true))
+  private var signature: (UIKeyboardType, UIReturnKeyType, Bool, Bool) {
+    (host?.keyType ?? .default, host?.returnType ?? .default, !(host?.before.isEmpty ?? true), wantsBar)
   }
 
   func contextChanged() {
     captureClip()
     let sig = signature
     if sig != built {
+      let old = built
       let typeChanged = sig.0 != built.0
       built = sig
       if typeChanged, [.numberPad, .phonePad, .decimalPad, .numbersAndPunctuation, .asciiCapableNumberPad].contains(sig.0) { layer_ = .numbers } else if typeChanged { layer_ = .letters }
-      typeChanged ? build() : style()
+      typeChanged || sig.3 != old.3 ? build() : style()
+      setNeedsLayout()
     }
     refreshShift()
     if status == nil { bar.show(suggestions(), status: nil) }
@@ -206,7 +241,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
     case .twitter: extra = [.char("@"), .char("#")]
     default: break
     }
-    let bottom: [KeyKind] = [.layer(layer_ == .letters ? .numbers : .letters), .mic, .space] + extra + [.ret]
+    let bottom: [KeyKind] = (host?.needsGlobe == true ? [.globe] : []) + [.layer(layer_ == .letters ? .numbers : .letters)] + (wantsBar ? [] : [.clip]) + [.mic, .space] + extra + [.ret]
     func chars(_ s: String) -> [KeyKind] { s.map { .char(String($0)) } }
     switch layer_ {
     case .letters:
@@ -251,6 +286,8 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
           symbol = shift == .lock ? "capslock.fill" : shift == .on ? "shift.fill" : "shift"
           if shift != .off { fill = dark ? UIColor(white: 0.95, alpha: 1) : .white; tint = .black }
         case .delete: symbol = "delete.left"
+        case .clip: symbol = "doc.on.clipboard"
+        case .globe: symbol = "globe"
         case .layer(let l): title = l == .letters ? "ABC" : l == .numbers ? "123" : "#+="
         case .mic:
           symbol = micState == .listening ? "waveform" : "mic.fill"
@@ -293,13 +330,15 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
   override func layoutSubviews() {
     super.layoutSubviews()
     chrome.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height + 90)
-    bar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: Self.barHeight)
-    panel.frame = CGRect(x: 0, y: Self.barHeight + 4, width: bounds.width, height: bounds.height - Self.barHeight - 4)
+    bar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: fullBar)
+    bar.isHidden = barHeight == 0
+    updateHeight()
+    panel.frame = CGRect(x: 0, y: barHeight + 4, width: bounds.width, height: bounds.height - barHeight - 4)
     let w = bounds.width
     let kw = (w - 2 * side - 9 * gap) / 10
     let wide = (w - 2 * side - 7 * kw - 6 * gap) / 2 - 13.7
     for (r, row) in keys.enumerated() {
-      let y = Self.barHeight + top + CGFloat(r) * (keyHeight + rowGap)
+      let y = barHeight + top + CGFloat(r) * (keyHeight + rowGap)
       switch r {
       case 0: place(row, y: y, x: side, widths: row.map { _ in kw })
       case 1 where layer_ == .letters:
@@ -314,7 +353,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
         let unit = kw * 1.3, ret = kw * 2.8
         var ws = row.map { k -> CGFloat in
           switch k.kind {
-          case .layer, .mic: unit
+          case .layer, .mic, .clip, .globe: unit
           case .ret: ret
           case .char: kw
           default: 0
@@ -338,7 +377,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
   private func key(at p: CGPoint) -> KeyView? {
     let all = keys.flatMap { $0 }
     if let k = all.first(where: { $0.frame.insetBy(dx: -gap / 2, dy: -rowGap / 2).contains(p) }) { return k }
-    guard p.y > Self.barHeight else { return nil }
+    guard p.y > barHeight else { return nil }
     return all.min { dist($0.frame, p) < dist($1.frame, p) }
   }
 
@@ -351,7 +390,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
     guard panel.isHidden else { return }
     for t in touches {
       let p = t.location(in: self)
-      guard p.y > Self.barHeight - 8, let k = key(at: p) else { continue }
+      guard p.y > barHeight - 8, let k = key(at: p) else { continue }
       press(k, t)
       if k.kind == .space { spaceStart[t] = p.x }
     }
@@ -463,6 +502,8 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
       style()
     case .layer(let l): switchLayer(l)
     case .mic: host.mic()
+    case .clip: showClips(true)
+    case .globe: host.globe()
     case .delete: break
     }
   }

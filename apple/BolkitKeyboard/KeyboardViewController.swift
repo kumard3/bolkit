@@ -4,10 +4,15 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
   private var board: KeyboardView!
   private var lastInserted = UserDefaults.standard.string(forKey: "lastResult") ?? ""
   private var visible = false
+  private var height: NSLayoutConstraint!
 
   var before: String { textDocumentProxy.documentContextBeforeInput ?? "" }
   var returnType: UIReturnKeyType { textDocumentProxy.returnKeyType ?? .default }
   var autocap: UITextAutocapitalizationType { textDocumentProxy.autocapitalizationType ?? .sentences }
+  var needsGlobe: Bool { needsInputModeSwitchKey }
+  func globe() { advanceToNextInputMode() }
+  var secure: Bool { textDocumentProxy.isSecureTextEntry ?? false }
+  var autocorrect: UITextAutocorrectionType { textDocumentProxy.autocorrectionType ?? .default }
   var keyType: UIKeyboardType { textDocumentProxy.keyboardType ?? .default }
   var appearance: UIKeyboardAppearance { textDocumentProxy.keyboardAppearance ?? .default }
 
@@ -18,15 +23,23 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    let h = view.heightAnchor.constraint(equalToConstant: KeyboardView.height)
-    h.priority = .required - 1
-    h.isActive = true
+    height = view.heightAnchor.constraint(equalToConstant: KeyboardView.height)
+    height.priority = .required - 1
+    height.isActive = true
+    board.onHeight = { [weak self] h in
+      guard let self else { return }
+      UIView.animate(withDuration: 0.25) {
+        self.height.constant = h
+        self.view.superview?.layoutIfNeeded()
+      }
+    }
     FlowShared.observe(FlowShared.changed) { [weak self] in self?.refresh() }
   }
 
   override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
     visible = true
+    board.rebuild()
     refresh()
   }
 

@@ -25,6 +25,11 @@ final class PreviewHost: KeyboardHost {
   var fullAccess: Bool { UserDefaults.standard.bool(forKey: "keyboardAccess") }
   var returnType = UIReturnKeyType(rawValue: UserDefaults.standard.integer(forKey: "keyboardReturn")) ?? .default
   var autocap = UITextAutocapitalizationType.none
+  var needsGlobe = false
+  func globe() {}
+  var secure = UserDefaults.standard.bool(forKey: "keyboardSecure")
+  var autocorrect = UserDefaults.standard.bool(forKey: "keyboardNoAutocorrect") ? UITextAutocorrectionType.no : .default
+  var height = KeyboardView.height
   var keyType = UIKeyboardType(rawValue: UserDefaults.standard.integer(forKey: "keyboardType")) ?? .default
   var appearance = UserDefaults.standard.bool(forKey: "keyboardLight") ? UIKeyboardAppearance.light : .default
   func insert(_ s: String) { text += s }
@@ -44,7 +49,7 @@ struct KeyboardPreview: View {
     VStack {
       Text(host.text.isEmpty ? "Preview" : host.text).foregroundStyle(.gray).frame(maxWidth: .infinity, alignment: .leading).padding()
       Spacer()
-      Embedded(host: host).frame(height: KeyboardView.height).padding(.bottom, UserDefaults.standard.double(forKey: "keyboardLift"))
+      Embedded(host: host).frame(width: UserDefaults.standard.double(forKey: "keyboardWidth") > 0 ? UserDefaults.standard.double(forKey: "keyboardWidth") : nil, height: host.height).animation(.easeOut(duration: 0.25), value: host.height).padding(.bottom, UserDefaults.standard.double(forKey: "keyboardLift"))
     }
     .background((light ? Color.white : Color.black).ignoresSafeArea())
     .preferredColorScheme(light ? .light : .dark)
@@ -64,6 +69,8 @@ struct KeyboardPreview: View {
     func makeUIView(context: Context) -> KeyboardView {
       let v = KeyboardView(host: host)
       host.board = v
+      v.forceLandscape = UserDefaults.standard.bool(forKey: "keyboardLandscape")
+      v.onHeight = { [weak host] h in host?.height = h }
       if UserDefaults.standard.integer(forKey: "keyboardClipboard") > 0 {
         let img = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 300)).jpegData(withCompressionQuality: 0.8) { c in
           UIColor.systemTeal.setFill(); c.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
