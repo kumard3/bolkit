@@ -8,7 +8,7 @@ struct Seg: Sendable { let start: Double, end: Double, speaker: Int }
 actor Engines {
   static let shared = Engines()
   var voz: Voz?
-  var parakeet: AsrManager?
+  var parakeet: [String: AsrManager] = [:]
 
   func vozTranscribe(_ samples: [Float], vocab: [String]) async throws -> [BolkitCore.Word] {
     if voz == nil { voz = try await Voz(cacheRoot: Extra.appSupport) }
@@ -16,14 +16,14 @@ actor Engines {
     return r.words.map { BolkitCore.Word(text: $0.text.trimmingCharacters(in: .whitespaces), start: $0.start, end: $0.end) }.filter { !$0.text.isEmpty }
   }
 
-  func parakeetTranscribe(_ samples: [Float]) async throws -> [BolkitCore.Word] {
-    if parakeet == nil {
+  func parakeetTranscribe(_ samples: [Float], _ info: ModelInfo) async throws -> [BolkitCore.Word] {
+    if parakeet[info.id] == nil {
       let m = AsrManager(config: .default)
-      try await m.loadModels(try await AsrModels.downloadAndLoad(version: .v3))
-      parakeet = m
+      try await m.loadModels(try await AsrModels.downloadAndLoad(version: Extra.version(info)))
+      parakeet[info.id] = m
     }
     var state = try TdtDecoderState()
-    let r = try await parakeet!.transcribe(samples, decoderState: &state)
+    let r = try await parakeet[info.id]!.transcribe(samples, decoderState: &state)
     var words: [BolkitCore.Word] = []
     for t in r.tokenTimings ?? [] {
       let piece = t.token.replacingOccurrences(of: "▁", with: " ")
@@ -47,7 +47,7 @@ actor Engines {
   }
 
   func dropVoz() { voz = nil }
-  func dropParakeet() { parakeet = nil }
+  func dropParakeet() { parakeet = [:] }
 }
 
 enum Extra {
@@ -68,13 +68,14 @@ enum Extra {
     try? FileManager.default.removeItem(atPath: appSupport + "/desert-ant-models")
   }
 
-  static func parakeetInstalled() -> Bool { AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v3)) }
-  static func parakeetDownload(_ p: @escaping @Sendable (Double) -> Void) async throws {
-    _ = try await AsrModels.downloadAndLoad(version: .v3, progressHandler: { p($0.fractionCompleted) })
+  static func version(_ info: ModelInfo) -> AsrModelVersion { info.id == "parakeet-v2" ? .v2 : .v3 }
+  static func parakeetInstalled(_ info: ModelInfo) -> Bool { AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: version(info))) }
+  static func parakeetDownload(_ info: ModelInfo, _ p: @escaping @Sendable (Double) -> Void) async throws {
+    _ = try await AsrModels.downloadAndLoad(version: version(info), progressHandler: { p($0.fractionCompleted) })
   }
-  static func parakeetDelete() {
+  static func parakeetDelete(_ info: ModelInfo) {
     Task { await Engines.shared.dropParakeet() }
-    try? FileManager.default.removeItem(at: AsrModels.defaultCacheDirectory(for: .v3))
+    try? FileManager.default.removeItem(at: AsrModels.defaultCacheDirectory(for: version(info)))
   }
 
   static func sortformerInstalled() -> Bool { !fluidDirs("sortformer").isEmpty }
@@ -88,7 +89,8 @@ enum Extra {
     let samples = try Audio.samples(file)
     switch info.kind {
     case .voz: return try await Engines.shared.vozTranscribe(samples, vocab: app.vocab)
-    case .parakeet: return try await Engines.shared.parakeetTranscribe(samples)
+    case .parakeet: return try await Engines.shared.parakeetTranscribe(samples, info)
+    case .sherpa: return try await Sherpa.transcribe(info, dir: app.models.url(info), samples: samples, lang: app.shortLang)
     default: throw SpeechError("\(info.title) is not available yet")
     }
   }

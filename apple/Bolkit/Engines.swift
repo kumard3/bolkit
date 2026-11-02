@@ -1,13 +1,14 @@
 import AVFoundation
 import BolkitCore
+import SherpaKit
 import SwiftUI
 
-enum Kind { case apple, whisper, voz, parakeet, speakers, cloud }
+enum Kind { case apple, whisper, voz, parakeet, sherpa, speakers, cloud }
 
 struct ModelInfo: Identifiable {
   let id: String, title: String, note: String, kind: Kind
-  var file: String? = nil, url: String? = nil, bytes: Int64 = 0, forced: String? = nil, sizeLabel: String
-  var live: Bool { kind == .apple }
+  var file: String? = nil, url: String? = nil, bytes: Int64 = 0, forced: String? = nil, family: String? = nil, stream = false, sizeLabel: String
+  var live: Bool { kind == .apple || stream }
 }
 
 let catalog: [ModelInfo] = [
@@ -28,6 +29,21 @@ let catalog: [ModelInfo] = [
         file: "ggml-large-v3-turbo-q5_0.bin", url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin", bytes: 574_041_195, sizeLabel: "547 MB"),
   .init(id: "voz", title: "Voz", note: "Powered by Desert Ant Labs. English, word timestamps.", kind: .voz, sizeLabel: "321 MB"),
   .init(id: "parakeet", title: "Parakeet", note: "NVIDIA Parakeet on the Neural Engine. English plus European languages.", kind: .parakeet, sizeLabel: "~460 MB"),
+  .init(id: "parakeet-v2", title: "Parakeet v2 English", note: "NVIDIA Parakeet on the Neural Engine. English only, best accuracy.", kind: .parakeet, sizeLabel: "~460 MB"),
+  .init(id: "sherpa:nemotron-3.5", title: "Nemotron 3.5 Streaming", note: "NVIDIA. Live, 40 languages, auto-detect, punctuated.", kind: .sherpa,
+        file: "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11", bytes: 475_271_763, stream: true, sizeLabel: "453 MB"),
+  .init(id: "sherpa:nemotron-en", title: "Nemotron Streaming English", note: "NVIDIA. Live English, punctuated.", kind: .sherpa,
+        file: "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25", bytes: 463_945_051, stream: true, sizeLabel: "442 MB"),
+  .init(id: "sherpa:zipformer-en", title: "Zipformer Streaming English", note: "Live English. Light and fast.", kind: .sherpa,
+        file: "sherpa-onnx-streaming-zipformer-en-2023-06-21-mobile", bytes: 365_748_162, stream: true, sizeLabel: "349 MB"),
+  .init(id: "sherpa:parakeet-110m", title: "Parakeet 110M English", note: "NVIDIA. Small and fast English.", kind: .sherpa,
+        file: "sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8", bytes: 104_337_827, family: "nemoCtc", sizeLabel: "100 MB"),
+  .init(id: "sherpa:canary-180m", title: "Canary 180M", note: "NVIDIA. English, Spanish, German and French.", kind: .sherpa,
+        file: "sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8", bytes: 153_692_328, family: "canary", sizeLabel: "147 MB"),
+  .init(id: "sherpa:moonshine-tiny", title: "Moonshine Tiny English", note: "Tiny and fast English.", kind: .sherpa,
+        file: "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27", bytes: 29_858_559, family: "moonshine", sizeLabel: "28 MB"),
+  .init(id: "sherpa:moonshine-base", title: "Moonshine Base English", note: "Balanced English.", kind: .sherpa,
+        file: "sherpa-onnx-moonshine-base-en-quantized-2026-02-27", bytes: 111_266_225, family: "moonshine", sizeLabel: "106 MB"),
   .init(id: "sortformer", title: "Speaker labels", note: "NVIDIA Sortformer on the Neural Engine. Tells up to 4 speakers apart in meetings.", kind: .speakers, sizeLabel: "~120 MB"),
   .init(id: "cloud:azure", title: "Azure Speech", note: "MAI-Transcribe-2. Needs your Azure key.", kind: .cloud, sizeLabel: "Cloud"),
   .init(id: "cloud:azureopenai", title: "Azure OpenAI", note: "Your transcription deployment. Needs endpoint and key.", kind: .cloud, sizeLabel: "Cloud"),
@@ -82,7 +98,8 @@ final class ModelStore {
       let size = (try? FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent(m.file!).path)[.size] as? Int64) ?? 0
       return size == m.bytes
     case .voz: return Extra.vozInstalled()
-    case .parakeet: return Extra.parakeetInstalled()
+    case .parakeet: return Extra.parakeetInstalled(m)
+    case .sherpa: return FileManager.default.fileExists(atPath: url(m).appendingPathComponent("tokens.txt").path)
     case .speakers: return Extra.sortformerInstalled()
     }
   }
@@ -96,7 +113,8 @@ final class ModelStore {
       switch m.kind {
       case .whisper: try await fetch(m)
       case .voz: try await Extra.vozDownload { p in Task { @MainActor in self.progress[m.id] = p } }
-      case .parakeet: try await Extra.parakeetDownload { p in Task { @MainActor in self.progress[m.id] = p } }
+      case .sherpa: try await fetchSherpa(m)
+      case .parakeet: try await Extra.parakeetDownload(m) { p in Task { @MainActor in self.progress[m.id] = p } }
       case .speakers: try await Extra.sortformerDownload { p in Task { @MainActor in self.progress[m.id] = p } }
       default: break
       }
@@ -109,7 +127,8 @@ final class ModelStore {
     switch m.kind {
     case .whisper: try? FileManager.default.removeItem(at: url(m))
     case .voz: Extra.vozDelete()
-    case .parakeet: Extra.parakeetDelete()
+    case .parakeet: Extra.parakeetDelete(m)
+    case .sherpa: try? FileManager.default.removeItem(at: url(m))
     case .speakers: Extra.sortformerDelete()
     default: break
     }
@@ -117,24 +136,40 @@ final class ModelStore {
   }
 
   private func fetch(_ m: ModelInfo) async throws {
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let dest = url(m)
+    let tmp = try await downloadFile(m, from: m.url!, share: 1)
+    try? FileManager.default.removeItem(at: dest)
+    try FileManager.default.moveItem(at: tmp, to: dest)
+    let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
+    if size != m.bytes { try? FileManager.default.removeItem(at: dest); throw SpeechError("Download was incomplete. Try again.") }
+  }
+
+  private func fetchSherpa(_ m: ModelInfo) async throws {
+    let tmp = try await downloadFile(m, from: Sherpa.releases + m.file! + ".tar.bz2", share: 0.8)
+    let part = dir.appendingPathComponent(m.file! + ".part")
+    try? FileManager.default.removeItem(at: part)
+    try FileManager.default.createDirectory(at: part, withIntermediateDirectories: true)
+    try await Task.detached { try Archive.extractTarBz2(tmp, to: part) { p in Task { @MainActor in self.progress[m.id] = 0.8 + p * 0.2 } } }.value
+    try? FileManager.default.removeItem(at: tmp)
+    try? FileManager.default.removeItem(at: url(m))
+    try FileManager.default.moveItem(at: part.appendingPathComponent(m.file!), to: url(m))
+    try? FileManager.default.removeItem(at: part)
+  }
+
+  private func downloadFile(_ m: ModelInfo, from: String, share: Double) async throws -> URL {
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     var obs: NSKeyValueObservation?
     defer { obs?.invalidate() }
-    let tmp: URL = try await withCheckedThrowingContinuation { c in
-      let t = URLSession.shared.downloadTask(with: URL(string: m.url!)!) { u, _, e in
+    return try await withCheckedThrowingContinuation { c in
+      let t = URLSession.shared.downloadTask(with: URL(string: from)!) { u, _, e in
         if let u {
           let keep = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
           try? FileManager.default.moveItem(at: u, to: keep)
           c.resume(returning: keep)
         } else { c.resume(throwing: e ?? SpeechError("Download failed")) }
       }
-      obs = t.progress.observe(\.fractionCompleted) { p, _ in Task { @MainActor in self.progress[m.id] = p.fractionCompleted } }
+      obs = t.progress.observe(\.fractionCompleted) { p, _ in Task { @MainActor in self.progress[m.id] = p.fractionCompleted * share } }
       t.resume()
     }
-    try? FileManager.default.removeItem(at: dest)
-    try FileManager.default.moveItem(at: tmp, to: dest)
-    let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
-    if size != m.bytes { try? FileManager.default.removeItem(at: dest); throw SpeechError("Download was incomplete. Try again.") }
   }
 }

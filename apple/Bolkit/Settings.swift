@@ -48,7 +48,7 @@ struct ModelsView: View {
           } else if !on && x.kind != .cloud {
             Button { Task { await m.models.download(x) } } label: { Image(systemName: "arrow.down.circle") }.foregroundStyle(.white)
           } else {
-            if x.kind == .whisper || x.kind == .voz || x.kind == .parakeet {
+            if x.kind == .whisper || x.kind == .voz || x.kind == .parakeet || x.kind == .sherpa {
               Button { m.models.delete(x); if selected == x.id { set("system") } } label: { Image(systemName: "trash") }.foregroundStyle(Mono.faint)
             }
             Image(systemName: selected == x.id ? "checkmark.circle.fill" : "circle").foregroundStyle(selected == x.id ? .white : Mono.faint)

@@ -29,6 +29,8 @@ targets:
     sources: [Bolkit]
     dependencies:
       - package: BolkitCore
+      - package: BolkitCore
+        product: SherpaKit
       - package: FluidAudio
       - package: DesertAnt
         product: Voz

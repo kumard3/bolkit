@@ -95,7 +95,8 @@ final class AppModel {
         dictating = true
         return
       }
-      let live = try await Speech.live(locale: language, vocab: vocab) { [weak self] t in Task { @MainActor in self?.dictText = t } }
+      let onText: @Sendable (String) -> Void = { [weak self] t in Task { @MainActor in self?.dictText = t } }
+      let live = info.kind == .sherpa && models.installed(info) ? await Sherpa.live(dir: models.url(info), onText: onText) : try await Speech.live(locale: language, vocab: vocab, onText: onText)
       liveSession = live
       try capture.start(to: nil) { live.accept($0) }
       dictating = true
