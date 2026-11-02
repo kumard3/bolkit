@@ -91,10 +91,16 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
   }
 
   private func openApp(_ url: URL) {
-    let sel = sel_registerName("openURL:")
+    typealias Open = @convention(c) (AnyObject, Selector, URL, [UIApplication.OpenExternalURLOptionsKey: Any], ((Bool) -> Void)?) -> Void
+    let modern = sel_registerName("openURL:options:completionHandler:")
+    let legacy = sel_registerName("openURL:")
     var r: UIResponder? = self
     while let x = r {
-      if x.responds(to: sel) { x.perform(sel, with: url); return }
+      if x.responds(to: modern), let m = class_getMethodImplementation(type(of: x), modern) {
+        unsafeBitCast(m, to: Open.self)(x, modern, url, [:], nil)
+        return
+      }
+      if x.responds(to: legacy) { _ = x.perform(legacy, with: url); return }
       r = x.next
     }
   }

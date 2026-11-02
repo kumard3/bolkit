@@ -55,10 +55,12 @@ struct Root: View {
       if t == "history" { m.showHistory = true } else if !m.dictating { Task { await m.toggleDictate() } }
     }
     .overlay(alignment: .top) {
-      if flow.hint {
-        Text(flow.phase == .listening ? "Listening. Swipe back to your app, then tap the mic when done." : "Starting session")
-          .font(.footnote).foregroundStyle(.black).padding(.horizontal, 14).padding(.vertical, 8)
-          .background(.white, in: Capsule()).padding(.top, 8)
+      if flow.hint || flow.phase != .off {
+        Button { flow.end() } label: {
+          Text(flow.phase == .listening ? "Listening. Swipe back to your app, then tap the mic when done." : flow.phase == .off ? "Starting session" : "Session on. Tap the keyboard mic. Tap here to end.")
+            .font(.footnote).foregroundStyle(.black).padding(.horizontal, 14).padding(.vertical, 8)
+            .background(.white, in: Capsule())
+        }.padding(.top, 8)
       }
     }
     .onChange(of: scene) { _, p in if p == .background { flow.hint = false } }
