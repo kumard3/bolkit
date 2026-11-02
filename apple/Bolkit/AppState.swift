@@ -115,11 +115,7 @@ final class AppModel {
       let url = FileManager.default.temporaryDirectory.appendingPathComponent("dictation.wav")
       do { t = try await transcribe(url, model: dictationModel).map(\.text).joined(separator: " ") } catch { self.error = error.localizedDescription; return }
     }
-    t = Polish.edits(t)
-    if smartCorrections { t = await Brain.correct(t) }
-    t = Polish.commands(t)
-    if language == "hi-IN" { t = Polish.hinglish(t) }
-    if autoPolish { t = Polish.polish(t) }
+    t = await clean(t)
     dictText = t
     dictID = nil
     guard !t.isEmpty else { return }
@@ -127,11 +123,25 @@ final class AppModel {
       copyOnFinish = false
       UIPasteboard.general.string = t
     }
+    dictID = remember(t)
+    if !translateTarget.isEmpty { translateTick += 1 }
+  }
+
+  func clean(_ raw: String) async -> String {
+    var t = Polish.edits(raw)
+    if smartCorrections { t = await Brain.correct(t) }
+    t = Polish.commands(t)
+    if language == "hi-IN" { t = Polish.hinglish(t) }
+    return autoPolish ? Polish.polish(t) : t
+  }
+
+  @discardableResult
+  func remember(_ t: String) -> String {
     let item = HistoryItem(text: t, language: shortLang)
-    dictID = item.id
     history.insert(item, at: 0)
     store.saveHistory(history)
-    if !translateTarget.isEmpty { translateTick += 1 }
+    Flow.publishWords(history, vocab: vocab)
+    return item.id
   }
 
   func saveTranslation(_ text: String, to code: String) {

@@ -9,8 +9,13 @@ struct BolkitApp: App {
   @State private var model = AppModel()
   var body: some Scene {
     WindowGroup {
-      Root().environment(model).preferredColorScheme(.dark).tint(.white)
-        .task { await model.runSelfTest() }
+      Group {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "keyboardReference") { KeyboardReference() } else if UserDefaults.standard.bool(forKey: "keyboardPreview") { KeyboardPreview() } else { Root().environment(model).preferredColorScheme(.dark).tint(.white).task { await model.runSelfTest() } }
+        #else
+        Root().environment(model).preferredColorScheme(.dark).tint(.white).task { await model.runSelfTest() }
+        #endif
+      }
     }
   }
 }
@@ -18,6 +23,8 @@ struct BolkitApp: App {
 struct Root: View {
   @Environment(AppModel.self) var m
   @State private var onboarding = false
+  @State private var flow = Flow.shared
+  @Environment(\.scenePhase) private var scene
 
   var body: some View {
     @Bindable var m = m
@@ -31,6 +38,11 @@ struct Root: View {
     .toolbarBackground(Mono.bg, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .onOpenURL { url in
+      if url.host == "flow" {
+        flow.hint = true
+        Task { await flow.open(m, listen: true) }
+        return
+      }
       guard url.host == "dictate-session" else { return }
       m.tab = 0
       m.copyOnFinish = true
@@ -42,8 +54,17 @@ struct Root: View {
       m.tab = 0
       if t == "history" { m.showHistory = true } else if !m.dictating { Task { await m.toggleDictate() } }
     }
+    .overlay(alignment: .top) {
+      if flow.hint {
+        Text(flow.phase == .listening ? "Listening. Swipe back to your app, then tap the mic when done." : "Starting session")
+          .font(.footnote).foregroundStyle(.black).padding(.horizontal, 14).padding(.vertical, 8)
+          .background(.white, in: Capsule()).padding(.top, 8)
+      }
+    }
+    .onChange(of: scene) { _, p in if p == .background { flow.hint = false } }
     .fullScreenCover(isPresented: $onboarding) { Onboarding { onboarding = false } }
     .onAppear {
+      Flow.publishWords(m.history, vocab: m.vocab)
       onboarding = !m.onboarded || UserDefaults.standard.bool(forKey: "forceOnboarding")
       if UserDefaults.standard.object(forKey: "tab") != nil { m.tab = UserDefaults.standard.integer(forKey: "tab") }
       if UserDefaults.standard.bool(forKey: "openFirst") { m.openID = m.meetings.first?.id }

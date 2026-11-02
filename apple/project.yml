@@ -26,7 +26,7 @@ targets:
   Bolkit:
     type: application
     platform: iOS
-    sources: [Bolkit]
+    sources: [Bolkit, Shared]
     dependencies:
       - package: BolkitCore
       - package: FluidAudio
@@ -49,6 +49,10 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Bolkit uses on-device speech recognition to write what you say.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+    entitlements:
+      path: Bolkit/Bolkit.entitlements
+      properties:
+        com.apple.security.application-groups: [group.ai.localvoice.app]
     info:
       path: Bolkit/Info.plist
       properties:
@@ -69,11 +73,15 @@ targets:
   BolkitKeyboard:
     type: app-extension
     platform: iOS
-    sources: [BolkitKeyboard]
+    sources: [BolkitKeyboard, Shared]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).ScribeKeyboard
         TARGETED_DEVICE_FAMILY: "1"
+    entitlements:
+      path: BolkitKeyboard/BolkitKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups: [group.ai.localvoice.app]
     info:
       path: BolkitKeyboard/Info.plist
       properties:
