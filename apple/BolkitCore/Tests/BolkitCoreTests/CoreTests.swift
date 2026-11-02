@@ -53,3 +53,7 @@ func dictate(_ s: String, polish: Bool) -> String {
   #expect(!Corrections.accept("I actually liked the demo", "I liked the demo"))
   #expect(!Corrections.accept("send it to Rahul no wait send it to Priya", "send it to Amit"))
 }
+
+@Test func hinglishCase() {
+  #expect(Polish.hinglish("Dekhte hain ye nice leta Hai, ya kya leta Hai? Hai na.") == "Dekhte hain ye nice leta hai, ya kya leta hai? Hai na.")
+}

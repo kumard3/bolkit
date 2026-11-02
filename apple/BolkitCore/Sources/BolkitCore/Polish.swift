@@ -77,6 +77,17 @@ public enum Polish {
     sub(sub(sub(t, re(#"[ \t]*\n[ \t]*"#), "\n"), re(#"[ \t]{2,}"#), " "), re(#"\n{3,}"#), "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  nonisolated(unsafe) static let midCaps = re(#"(?<=[\p{Ll},;:] )(Hai|Hain|Ho|Tha|Thi|Ki|Ka|Ke|Ko|Se|Ye|Yeh|Wo|Kya|Nahi|Bhi|Toh|To)\b"#, [])
+
+  public static func hinglish(_ text: String) -> String {
+    var t = text
+    for m in midCaps.matches(in: t, range: NSRange(t.startIndex..., in: t)).reversed() {
+      let r = Range(m.range, in: t)!
+      t.replaceSubrange(r, with: t[r].lowercased())
+    }
+    return t
+  }
+
   public static func commands(_ text: String) -> String {
     spaces(layout.reduce(text) { sub($0, $1.0, $1.1) })
   }

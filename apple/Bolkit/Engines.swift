@@ -11,7 +11,7 @@ struct ModelInfo: Identifiable {
 }
 
 let catalog: [ModelInfo] = [
-  .init(id: "system", title: "Apple Speech", note: "Built in. On device, live as you speak.", kind: .apple, sizeLabel: "Built in"),
+  .init(id: "system", title: "Apple Speech", note: "Built in. On device, live as you speak. Pick Hinglish in Settings for Hindi and English mixed.", kind: .apple, sizeLabel: "Built in"),
   .init(id: "whisper:oriserve-swift-q8", title: "Hinglish Swift", note: "Whisper tuned for Hinglish and Indian English.", kind: .whisper,
         file: "ggml-oriserve-hinglish-q8_0.bin", url: "https://huggingface.co/anish2305/airnote-hinglish-stt-ggml/resolve/main/ggml-oriserve-hinglish-q8_0.bin", bytes: 81_768_585, forced: "hi", sizeLabel: "78 MB"),
   .init(id: "whisper:small-en-q5", title: "Whisper Small English", note: "Higher accuracy English.", kind: .whisper,

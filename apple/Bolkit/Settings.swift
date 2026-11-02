@@ -41,7 +41,7 @@ struct ModelsView: View {
         let on = m.models.installed(x)
         HStack(spacing: 10) {
           Button { if on { set(x.id) } else if x.kind == .cloud { m.tab = 4 } else { Task { await m.models.download(x) } } } label: {
-            Row(title: x.title, sub: m.models.failure[x.id] ?? x.note, trailing: on ? x.sizeLabel : x.kind == .cloud ? "Add key" : nil)
+            Row(title: x.title, sub: m.models.failure[x.id] ?? x.note, trailing: on ? x.sizeLabel : x.kind == .cloud ? "Add key" : nil, badge: x.id == "system" ? "Suggested" : nil)
           }
           if let p = m.models.progress[x.id] {
             Text("\(Int(p * 100))%").font(.footnote.monospacedDigit()).foregroundStyle(Mono.dim)
@@ -166,41 +166,73 @@ struct SettingsView: View {
 struct Onboarding: View {
   @Environment(AppModel.self) var m
   var done: () -> Void
-  @State private var step = 0
-  @State private var granted = false
+  @State private var step = UserDefaults.standard.integer(forKey: "onboardingStep")
+  @State private var pick = Onboarding.suggested
+  @State private var lang = "es-ES"
+
+  static let india = Locale.current.region?.identifier == "IN"
+  static let suggested = india ? 1 : 0
 
   var body: some View {
-    VStack(spacing: 26) {
+    VStack(spacing: 22) {
       Spacer()
-      Image(systemName: step == 0 ? "waveform" : step == 1 ? "mic" : "cpu").font(.system(size: 56, weight: .thin)).foregroundStyle(.white)
-      Text(["Welcome to Bolkit", "Allow the microphone", "Choose a model"][step]).font(.title.weight(.semibold)).foregroundStyle(.white)
-      Text(["Speak, and it writes. Private, on your phone.", "Bolkit needs the mic and speech recognition to hear you.", "Pick how Bolkit transcribes. You can change it later."][step])
+      Image(systemName: step == 0 ? "waveform" : "character.bubble").font(.system(size: 56, weight: .thin)).foregroundStyle(.white)
+      Text(step == 0 ? "Welcome to Bolkit" : "How do you speak?").font(.title.weight(.semibold)).foregroundStyle(.white)
+      Text(step == 0 ? "Speak, and it writes. Private, on your phone." : "You can change this any time in Settings.")
         .multilineTextAlignment(.center).foregroundStyle(Mono.dim).padding(.horizontal, 32)
-      if step == 2 {
-        VStack {
-          ForEach(catalog) { x in
-            Button { if x.kind == .apple { m.dictationModel = x.id } } label: {
-              HStack {
-                Row(title: x.title, sub: x.note)
-                if m.dictationModel == x.id && x.kind == .apple { Image(systemName: "checkmark.circle.fill") }
-              }.padding(12).background(Mono.surface, in: RoundedRectangle(cornerRadius: 14))
-            }.opacity(x.kind == .apple ? 1 : 0.45)
+      if step == 1 {
+        VStack(spacing: 10) {
+          choice(0, "English", "Built in. Nothing to download.")
+          choice(1, "Hinglish", "Hindi and English mixed, written in English letters. Built in, live as you speak.")
+          choice(2, "Another language", "Built in. Pick your language.")
+          if pick == 2 {
+            Picker("Language", selection: $lang) { ForEach(languages.filter { !$0.code.hasPrefix("en") && $0.code != "hi-IN" }, id: \.code) { Text($0.name).tag($0.code) } }
           }
         }.padding(.horizontal, 20)
       }
       Spacer()
       Button {
         Task {
-          if step == 1 { granted = await Speech.authorize() }
-          if step == 2 { m.onboarded = true; done() } else { step += 1 }
+          if step == 0 { _ = await Speech.authorize(); step = 1 } else { apply(); m.onboarded = true; done() }
         }
       } label: {
-        Text(step == 2 ? "Start" : step == 1 ? "Allow" : "Continue").font(.headline).foregroundStyle(.black)
+        Text(step == 0 ? "Continue" : "Start").font(.headline).foregroundStyle(.black)
           .frame(maxWidth: .infinity).padding(.vertical, 16).background(.white, in: Capsule())
       }.padding(.horizontal, 28)
-      if step == 1 { Button("Not now") { step += 1 }.font(.footnote).foregroundStyle(Mono.dim) }
     }
     .padding(.bottom, 20)
     .background(Mono.bg.ignoresSafeArea())
+  }
+
+  func choice(_ i: Int, _ title: String, _ sub: String) -> some View {
+    Button { pick = i } label: {
+      HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(spacing: 8) {
+            Text(title).foregroundStyle(.white)
+            if i == Onboarding.suggested {
+              Text("Suggested").font(.caption2.weight(.semibold)).foregroundStyle(.black).padding(.horizontal, 7).padding(.vertical, 2).background(.white, in: Capsule())
+            }
+          }
+          Text(sub).font(.footnote).foregroundStyle(Mono.dim).multilineTextAlignment(.leading)
+        }
+        Spacer()
+        Image(systemName: pick == i ? "checkmark.circle.fill" : "circle").foregroundStyle(pick == i ? .white : Mono.faint)
+      }
+      .padding(14)
+      .background(Mono.surface, in: RoundedRectangle(cornerRadius: 14))
+      .overlay(RoundedRectangle(cornerRadius: 14).stroke(pick == i ? .white.opacity(0.6) : Mono.border, lineWidth: 1))
+    }.buttonStyle(.plain)
+  }
+
+  func apply() {
+    switch pick {
+    case 1:
+      m.language = "hi-IN"; m.dictationModel = "system"; m.meetingModel = "system"
+    case 2:
+      m.language = lang; m.dictationModel = "system"; m.meetingModel = "system"
+    default:
+      m.language = Onboarding.india ? "en-IN" : "en-US"; m.dictationModel = "system"; m.meetingModel = "system"
+    }
   }
 }

@@ -77,10 +77,14 @@ struct Row: View {
   var title: String
   var sub: String? = nil
   var trailing: String? = nil
+  var badge: String? = nil
   var body: some View {
     HStack {
       VStack(alignment: .leading, spacing: 3) {
-        Text(title).foregroundStyle(.white)
+        HStack(spacing: 8) {
+          Text(title).foregroundStyle(.white)
+          if let badge { Text(badge).font(.caption2.weight(.semibold)).foregroundStyle(.black).padding(.horizontal, 7).padding(.vertical, 2).background(.white, in: Capsule()) }
+        }
         if let sub { Text(sub).font(.footnote).foregroundStyle(Mono.dim) }
       }
       Spacer()

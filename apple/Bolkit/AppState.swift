@@ -3,7 +3,7 @@ import BolkitCore
 import SwiftUI
 
 let languages: [(code: String, name: String)] = [
-  ("en-US", "English (US)"), ("en-IN", "English (India)"), ("en-GB", "English (UK)"), ("hi-IN", "Hindi"),
+  ("en-US", "English (US)"), ("en-IN", "English (India)"), ("en-GB", "English (UK)"), ("hi-IN", "Hinglish"),
   ("es-ES", "Spanish"), ("fr-FR", "French"), ("de-DE", "German"), ("pt-BR", "Portuguese"), ("it-IT", "Italian"), ("ja-JP", "Japanese"),
 ]
 
@@ -118,6 +118,7 @@ final class AppModel {
     t = Polish.edits(t)
     if smartCorrections { t = await Brain.correct(t) }
     t = Polish.commands(t)
+    if language == "hi-IN" { t = Polish.hinglish(t) }
     if autoPolish { t = Polish.polish(t) }
     dictText = t
     dictID = nil
@@ -248,6 +249,7 @@ final class AppModel {
         segs = ((try? await Engines.shared.diarize(samples)) ?? []).map { ($0.start, $0.end, $0.speaker) }
       }
       turns = Digest.turns(from: words, segments: segs)
+      if language == "hi-IN" { turns = turns.map { var t = $0; t.text = Polish.hinglish(t.text); return t } }
       if autoPolish { turns = turns.map { var t = $0; t.text = Polish.polish(t.text); return t } }
     } catch { self.error = "Saved the audio, but transcription failed: \(error.localizedDescription)" }
     let text = turns.map(\.text).joined(separator: " ")
