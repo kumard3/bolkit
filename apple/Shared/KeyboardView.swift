@@ -5,9 +5,11 @@ import UIKit
   var returnType: UIReturnKeyType { get }
   var autocap: UITextAutocapitalizationType { get }
   var appearance: UIKeyboardAppearance { get }
+  var keyType: UIKeyboardType { get }
   func insert(_ s: String)
   func delete()
   func move(_ n: Int)
+  var fullAccess: Bool { get }
   func mic()
 }
 
@@ -64,6 +66,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
 
   weak var host: KeyboardHost?
   private var layer_ = Layer.letters
+  private var built: (UIKeyboardType, UIReturnKeyType, Bool) = (.default, .default, false)
   private enum Shift { case off, on, lock }
   private var shift = Shift.off
   private var lastShiftTap = Date.distantPast
@@ -81,12 +84,24 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
   private let haptic = UIImpactFeedbackGenerator(style: .light)
   private let checker = UITextChecker()
   private var history: [String] = []
-  private let solid: Bool
+  private let chrome = UIView()
+  private let panel = ClipboardPanel()
+  private let clips = ClipStore()
+  private var clipTimer: Timer?
 
-  init(host: KeyboardHost?, solidBackground: Bool = false) {
+  init(host: KeyboardHost?) {
     self.host = host
-    solid = solidBackground
-    super.init(frame: .zero, inputViewStyle: .keyboard)
+    super.init(frame: .zero, inputViewStyle: .default)
+    chrome.layer.cornerRadius = 38
+    chrome.layer.cornerCurve = .continuous
+    chrome.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+    insertSubview(chrome, at: 0)
+    panel.store = clips
+    panel.isHidden = true
+    panel.insert = { [weak self] t in self?.host?.insert(t); self?.refreshShiftSoon() }
+    panel.back = { [weak self] in self?.showClips(false) }
+    bar.onClip = { [weak self] in self?.showClips(self?.panel.isHidden == true) }
+    addSubview(panel)
     isMultipleTouchEnabled = true
     addSubview(bar)
     bar.pick = { [weak self] w in self?.accept(w) }
@@ -132,13 +147,66 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
     style()
   }
 
+  func showClips(_ on: Bool) {
+    if on { captureClip() }
+    panel.isHidden = !on
+    keys.flatMap { $0 }.forEach { $0.isHidden = on }
+    bar.clipOn = on
+    if on { panel.apply(dark: dark) }
+  }
+
+  private func captureClip() {
+    if host?.fullAccess ?? true { clips.capture() }
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    clipTimer?.invalidate()
+    clipTimer = nil
+    guard window != nil else { return }
+    captureClip()
+    clipTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        let n = self.clips.items.count
+        self.captureClip()
+        if !self.panel.isHidden, n != self.clips.items.count { self.panel.reload() }
+      }
+    }
+  }
+
+  func seed(_ texts: [String], image: Data?, images: Bool = false) {
+    panel.images = images
+    texts.reversed().forEach { clips.add(text: $0) }
+    if let image { clips.add(image: image) }
+  }
+
+  private var signature: (UIKeyboardType, UIReturnKeyType, Bool) {
+    (host?.keyType ?? .default, host?.returnType ?? .default, !(host?.before.isEmpty ?? true))
+  }
+
   func contextChanged() {
+    captureClip()
+    let sig = signature
+    if sig != built {
+      let typeChanged = sig.0 != built.0
+      built = sig
+      if typeChanged, [.numberPad, .phonePad, .decimalPad, .numbersAndPunctuation, .asciiCapableNumberPad].contains(sig.0) { layer_ = .numbers } else if typeChanged { layer_ = .letters }
+      typeChanged ? build() : style()
+    }
     refreshShift()
     if status == nil { bar.show(suggestions(), status: nil) }
   }
 
   private func rows() -> [[KeyKind]] {
-    let bottom: [KeyKind] = [.layer(layer_ == .letters ? .numbers : .letters), .mic, .space, .ret]
+    var extra: [KeyKind] = []
+    switch host?.keyType ?? .default {
+    case .URL, .webSearch: extra = [.char(".")]
+    case .emailAddress: extra = [.char("@"), .char(".")]
+    case .twitter: extra = [.char("@"), .char("#")]
+    default: break
+    }
+    let bottom: [KeyKind] = [.layer(layer_ == .letters ? .numbers : .letters), .mic, .space] + extra + [.ret]
     func chars(_ s: String) -> [KeyKind] { s.map { .char(String($0)) } }
     switch layer_ {
     case .letters:
@@ -152,7 +220,9 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
 
   private func build() {
     keys.flatMap { $0 }.forEach { $0.removeFromSuperview() }
+    built = signature
     keys = rows().map { $0.map { KeyView($0) } }
+    if !panel.isHidden { keys.flatMap { $0 }.forEach { $0.isHidden = true } }
     keys.flatMap { $0 }.forEach { insertSubview($0, belowSubview: popupText) }
     style()
     setNeedsLayout()
@@ -160,7 +230,9 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
 
   private func style() {
     let p = palette
-    backgroundColor = !solid ? nil : (dark ? UIColor(white: 0.125, alpha: 1) : UIColor(red: 0.886, green: 0.894, blue: 0.91, alpha: 1))
+    chrome.backgroundColor = dark ? UIColor(white: 0.125, alpha: 1) : UIColor(red: 0.886, green: 0.894, blue: 0.91, alpha: 1)
+    panel.fullAccess = host?.fullAccess ?? true
+    panel.apply(dark: dark)
     bar.apply(text: p.text, dark: dark)
     popup.fillColor = p.popup.cgColor
     popupText.textColor = p.text
@@ -185,8 +257,10 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
           if micState == .listening { fill = .systemRed; tint = .white }
           if micState == .working { tint = tint.withAlphaComponent(0.4) }
         case .ret:
-          if let t = Self.returnTitle(ret) { title = t } else { symbol = "return" }
-          if Self.accent(ret) { fill = .systemBlue; tint = .white }
+          let web = [.URL, .webSearch].contains(host?.keyType ?? .default) && (ret == .go || ret == .search)
+          if web { symbol = "arrow.right" } else if let t = Self.returnTitle(ret) { title = t } else { symbol = "return" }
+          let goes = [.go, .google, .search, .yahoo, .route, .join, .continue].contains(ret)
+          if Self.accent(ret) && (!goes || !(host?.before.isEmpty ?? true)) { fill = .systemBlue; tint = .white }
         }
         k.backgroundColor = fill
         k.label.text = title
@@ -218,7 +292,9 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
 
   override func layoutSubviews() {
     super.layoutSubviews()
+    chrome.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height + 90)
     bar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: Self.barHeight)
+    panel.frame = CGRect(x: 0, y: Self.barHeight + 4, width: bounds.width, height: bounds.height - Self.barHeight - 4)
     let w = bounds.width
     let kw = (w - 2 * side - 9 * gap) / 10
     let wide = (w - 2 * side - 7 * kw - 6 * gap) / 2 - 13.7
@@ -235,9 +311,18 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
         let span = wide * 2 + 27.4 + n * mid + (n - 1) * gap
         place(row, y: y, x: (w - span) / 2, widths: [wide] + row.dropFirst().dropLast().map { _ in mid } + [wide], gaps: [13.7] + Array(repeating: gap, count: row.count - 3) + [13.7])
       default:
-        let unit = kw * 1.3
-        let ret = kw * 2.8
-        place(row, y: y, x: side, widths: [unit, unit, w - 2 * side - unit * 2 - ret - 3 * gap, ret])
+        let unit = kw * 1.3, ret = kw * 2.8
+        var ws = row.map { k -> CGFloat in
+          switch k.kind {
+          case .layer, .mic: unit
+          case .ret: ret
+          case .char: kw
+          default: 0
+          }
+        }
+        let rest = w - 2 * side - ws.reduce(0, +) - CGFloat(row.count - 1) * gap
+        if let i = row.firstIndex(where: { $0.kind == .space }) { ws[i] = rest }
+        place(row, y: y, x: side, widths: ws)
       }
     }
   }
@@ -263,6 +348,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
   }
 
   override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+    guard panel.isHidden else { return }
     for t in touches {
       let p = t.location(in: self)
       guard p.y > Self.barHeight - 8, let k = key(at: p) else { continue }
@@ -459,6 +545,10 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
 
 final class SuggestionBar: UIView {
   var pick: ((String) -> Void)?
+  var onClip: (() -> Void)?
+  var clipOn = false { didSet { clip.backgroundColor = clipOn ? UIColor.white.withAlphaComponent(0.18) : nil } }
+  private let clip = UIButton(type: .custom)
+  private var ink = UIColor.white
   private var buttons: [UIButton] = []
   private var dividers: [UIView] = []
   private let statusLabel = UILabel()
@@ -478,6 +568,10 @@ final class SuggestionBar: UIView {
       addSubview(d)
       dividers.append(d)
     }
+    clip.setImage(UIImage(systemName: "doc.on.clipboard", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17)), for: .normal)
+    clip.layer.cornerRadius = 8
+    clip.addAction(UIAction { [weak self] _ in self?.onClip?() }, for: .touchUpInside)
+    addSubview(clip)
     statusLabel.font = .systemFont(ofSize: 15)
     statusLabel.textAlignment = .center
     statusLabel.isHidden = true
@@ -488,6 +582,7 @@ final class SuggestionBar: UIView {
 
   func apply(text: UIColor, dark: Bool) {
     buttons.forEach { $0.setTitleColor(text.withAlphaComponent(0.6), for: .normal) }
+    clip.tintColor = text.withAlphaComponent(0.75)
     statusLabel.textColor = text.withAlphaComponent(0.7)
     dividers.forEach { $0.backgroundColor = dark ? UIColor(white: 1, alpha: 0.22) : UIColor(white: 0, alpha: 0.2) }
   }
@@ -501,9 +596,10 @@ final class SuggestionBar: UIView {
 
   override func layoutSubviews() {
     super.layoutSubviews()
-    let w = bounds.width / 3
+    let w = (bounds.width - 44) / 3
+    clip.frame = CGRect(x: bounds.width - 42, y: 6, width: 38, height: bounds.height - 12)
     for (i, b) in buttons.enumerated() { b.frame = CGRect(x: CGFloat(i) * w, y: 0, width: w, height: bounds.height) }
     for (i, d) in dividers.enumerated() { d.frame = CGRect(x: w * CGFloat(i + 1), y: 9, width: 1 / UIScreen.main.scale, height: bounds.height - 18) }
-    statusLabel.frame = bounds
+    statusLabel.frame = CGRect(x: 0, y: 0, width: bounds.width - 44, height: bounds.height)
   }
 }

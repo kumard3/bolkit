@@ -8,6 +8,7 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
   var before: String { textDocumentProxy.documentContextBeforeInput ?? "" }
   var returnType: UIReturnKeyType { textDocumentProxy.returnKeyType ?? .default }
   var autocap: UITextAutocapitalizationType { textDocumentProxy.autocapitalizationType ?? .sentences }
+  var keyType: UIKeyboardType { textDocumentProxy.keyboardType ?? .default }
   var appearance: UIKeyboardAppearance { textDocumentProxy.keyboardAppearance ?? .default }
 
   override func loadView() {
@@ -40,6 +41,8 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     super.traitCollectionDidChange(previous)
     board.contextChanged()
   }
+
+  var fullAccess: Bool { hasFullAccess }
 
   func insert(_ s: String) { textDocumentProxy.insertText(s) }
   func delete() { textDocumentProxy.deleteBackward() }
