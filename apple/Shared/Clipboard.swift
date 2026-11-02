@@ -101,15 +101,14 @@ final class ClipboardPanel: UIView {
   var images = false
   private var dark = true
   private let abc = UIButton(type: .custom)
-  private let textTab = UIButton(type: .custom)
-  private let imageTab = UIButton(type: .custom)
+  private let tabs = UISegmentedControl(items: ["Text", "Images"])
   private let clear = UIButton(type: .custom)
   private let hint = UILabel()
   private let scroll = UIScrollView()
 
   override init(frame: CGRect) {
     super.init(frame: frame)
-    for (b, t) in [(abc, "ABC"), (textTab, "Text"), (imageTab, "Images"), (clear, "Clear all")] {
+    for (b, t) in [(abc, "ABC"), (clear, "Clear all")] {
       b.setTitle(t, for: .normal)
       b.titleLabel?.font = .systemFont(ofSize: 15)
       b.layer.cornerRadius = 8
@@ -117,8 +116,13 @@ final class ClipboardPanel: UIView {
       addSubview(b)
     }
     abc.addAction(UIAction { [weak self] _ in self?.back?() }, for: .touchUpInside)
-    textTab.addAction(UIAction { [weak self] _ in self?.images = false; self?.reload() }, for: .touchUpInside)
-    imageTab.addAction(UIAction { [weak self] _ in self?.images = true; self?.reload() }, for: .touchUpInside)
+    tabs.selectedSegmentIndex = 0
+    tabs.addAction(UIAction { [weak self] _ in
+      guard let self else { return }
+      images = tabs.selectedSegmentIndex == 1
+      reload()
+    }, for: .valueChanged)
+    addSubview(tabs)
     clear.addAction(UIAction { [weak self] _ in self?.store.clear(); self?.reload() }, for: .touchUpInside)
     hint.font = .systemFont(ofSize: 15)
     hint.textAlignment = .center
@@ -139,12 +143,16 @@ final class ClipboardPanel: UIView {
   private var ink: UIColor { dark ? .white : .black }
 
   func reload() {
-    for b in [abc, textTab, imageTab, clear] {
+    for b in [abc, clear] {
       b.setTitleColor(ink, for: .normal)
       b.backgroundColor = key
     }
-    let on = dark ? UIColor(white: 0.45, alpha: 1) : UIColor(white: 0.78, alpha: 1)
-    (images ? imageTab : textTab).backgroundColor = on
+    if tabs.selectedSegmentIndex != (images ? 1 : 0) { tabs.selectedSegmentIndex = images ? 1 : 0 }
+    tabs.overrideUserInterfaceStyle = dark ? .dark : .light
+    tabs.backgroundColor = key
+    tabs.selectedSegmentTintColor = dark ? UIColor(white: 0.45, alpha: 1) : UIColor(white: 0.82, alpha: 1)
+    tabs.setTitleTextAttributes([.foregroundColor: ink, .font: UIFont.systemFont(ofSize: 15)], for: .normal)
+    tabs.setTitleTextAttributes([.foregroundColor: ink, .font: UIFont.systemFont(ofSize: 15, weight: .medium)], for: .selected)
     hint.textColor = ink
     scroll.subviews.forEach { $0.removeFromSuperview() }
     let items = store.items.filter { $0.isImage == images }
@@ -177,17 +185,19 @@ final class ClipboardPanel: UIView {
         v.isUserInteractionEnabled = false
         tile.addSubview(v)
       } else {
-        let l = UILabel(frame: CGRect(x: 10, y: 6, width: tile.bounds.width - 34, height: tile.bounds.height - 12))
+        let l = UILabel()
         l.numberOfLines = 3
         l.font = .systemFont(ofSize: 14)
         l.textColor = ink
         l.text = c.text
+        let tw = tile.bounds.width - 38
+        l.frame = CGRect(x: 10, y: 8, width: tw, height: min(l.sizeThatFits(CGSize(width: tw, height: .greatestFiniteMagnitude)).height, tile.bounds.height - 16))
         l.isUserInteractionEnabled = false
         tile.addSubview(l)
       }
       tile.addAction(UIAction { [weak self] _ in self?.pick(c) }, for: .touchUpInside)
       let x = UIButton(type: .custom)
-      x.frame = CGRect(x: f.maxX - 28, y: f.minY + 2, width: 26, height: 26)
+      x.frame = CGRect(x: f.maxX - 30, y: f.minY + 4, width: 26, height: 26)
       x.setImage(UIImage(systemName: "xmark.circle.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15)), for: .normal)
       x.tintColor = images ? .white : ink.withAlphaComponent(0.5)
       x.addAction(UIAction { [weak self] _ in self?.store.remove(c); self?.reload() }, for: .touchUpInside)
@@ -204,24 +214,22 @@ final class ClipboardPanel: UIView {
     store.noteOwnWrite()
     hint.text = "Copied. Now paste"
     hint.isHidden = false
-    textTab.isHidden = true
-    imageTab.isHidden = true
+    tabs.isHidden = true
     DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
       self?.hint.isHidden = true
-      self?.textTab.isHidden = false
-      self?.imageTab.isHidden = false
+      self?.tabs.isHidden = false
     }
   }
 
   override func layoutSubviews() {
     super.layoutSubviews()
     let w = bounds.width, side: CGFloat = 6.7
-    abc.frame = CGRect(x: side, y: 2, width: 58, height: 34)
+    abc.frame = CGRect(x: side, y: 2, width: 64, height: 34)
     clear.frame = CGRect(x: w - side - 88, y: 2, width: 88, height: 34)
-    textTab.frame = CGRect(x: w / 2 - 80, y: 2, width: 78, height: 34)
-    imageTab.frame = CGRect(x: w / 2 + 2, y: 2, width: 78, height: 34)
+    tabs.frame = CGRect(x: (w - 160) / 2, y: 2, width: 160, height: 34)
     hint.frame = CGRect(x: 80, y: 2, width: w - 180, height: 34)
     scroll.frame = CGRect(x: 0, y: 44, width: w, height: bounds.height - 44)
     if scroll.subviews.isEmpty || scroll.contentSize.width != w { reload() }
+    tabs.layoutIfNeeded()
   }
 }
