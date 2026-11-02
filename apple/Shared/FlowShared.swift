@@ -8,6 +8,7 @@ struct FlowState: Codable {
   var resultID = ""
   var resultText = ""
   var resultAt = Date.distantPast
+  var partial = ""
   var error: String?
   var alive: Bool { phase != .off && -beat.timeIntervalSinceNow < 6 }
 }

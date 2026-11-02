@@ -101,6 +101,23 @@ struct SettingsView: View {
         }.onChange(of: smart) { m.smartCorrections = smart }
       }
       Card {
+        Text("Keyboard").font(.footnote).foregroundStyle(Mono.faint)
+        LabeledContent("Session length") {
+          Picker("Session length", selection: Binding(get: { m.text("flowMinutes").ifEmpty("15") }, set: { m.setText("flowMinutes", $0) })) {
+            Text("5 minutes").tag("5")
+            Text("15 minutes").tag("15")
+            Text("1 hour").tag("60")
+            Text("Until I stop").tag("0")
+          }.labelsHidden()
+        }
+        LabeledContent("Return to") {
+          Picker("Return to", selection: Binding(get: { m.text("flowReturn") }, set: { m.setText("flowReturn", $0) })) {
+            Text("Swipe back").tag("")
+            ForEach(Flow.apps, id: \.name) { Text($0.name).tag($0.name) }
+          }.labelsHidden()
+        }
+      }
+      Card {
         Text("Vocabulary").font(.footnote).foregroundStyle(Mono.faint)
         TextField("Names and jargon, comma separated", text: $vocabText, axis: .vertical)
           .onSubmit { m.vocab = vocabText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }

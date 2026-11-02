@@ -40,7 +40,7 @@ struct Root: View {
     .onOpenURL { url in
       if url.host == "flow" {
         flow.hint = true
-        Task { await flow.open(m, listen: true) }
+        Task { await flow.open(m, listen: true, returning: true) }
         return
       }
       guard url.host == "dictate-session" else { return }
@@ -57,7 +57,7 @@ struct Root: View {
     .overlay(alignment: .top) {
       if flow.hint || flow.phase != .off {
         Button { flow.end() } label: {
-          Text(flow.phase == .listening ? "Listening. Swipe back to your app, then tap the mic when done." : flow.phase == .off ? "Starting session" : "Session on. Tap the keyboard mic. Tap here to end.")
+          Text(flow.phase == .listening ? "Listening. Swipe back to your app, then tap the mic when done." : flow.phase == .off ? "Starting session" : "Session on for \(flow.lengthLabel). Tap the keyboard mic. Tap here to end.")
             .font(.footnote).foregroundStyle(.black).padding(.horizontal, 14).padding(.vertical, 8)
             .background(.white, in: Capsule())
         }.padding(.top, 8)

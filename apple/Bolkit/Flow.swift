@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 import BolkitCore
 import Foundation
 
@@ -12,7 +13,13 @@ final class Sink: @unchecked Sendable {
 @MainActor @Observable
 final class Flow {
   static let shared = Flow()
-  static let idleSeconds = 300.0
+  static let apps: [(name: String, scheme: String)] = [
+    ("WhatsApp", "whatsapp://"), ("Messages", "sms://"), ("Safari", "x-web-search://"), ("Notes", "mobilenotes://"), ("Telegram", "tg://"),
+    ("Instagram", "instagram://"), ("Gmail", "googlegmail://"), ("Slack", "slack://"), ("ChatGPT", "chatgpt://"), ("Claude", "claude://"),
+  ]
+
+  var minutes: Int { Int(app?.text("flowMinutes").ifEmpty("15") ?? "15") ?? 15 }
+  var lengthLabel: String { minutes == 0 ? "until you stop it" : minutes >= 60 ? "\(minutes / 60) hour" : "\(minutes) min" }
 
   var hint = false
   private(set) var phase = FlowPhase.off
@@ -24,7 +31,7 @@ final class Flow {
   @ObservationIgnored private var beat: Timer?
   @ObservationIgnored private var idle: Timer?
 
-  func open(_ app: AppModel, listen: Bool) async {
+  func open(_ app: AppModel, listen: Bool, returning: Bool = false) async {
     self.app = app
     FlowShared.observe(FlowShared.command) { [weak self] in
       guard let self, let a = FlowShared.take() else { return }
@@ -48,6 +55,10 @@ final class Flow {
       set(.idle)
     }
     if listen { await self.listen() }
+    if returning, phase == .listening, let url = Flow.apps.first(where: { $0.name == app.text("flowReturn") }).flatMap({ URL(string: $0.scheme) }) {
+      try? await Task.sleep(for: .milliseconds(700))
+      await UIApplication.shared.open(url)
+    }
   }
 
   func listen() async {
@@ -55,7 +66,10 @@ final class Flow {
     idle?.invalidate()
     state.error = nil
     do {
-      let l = try await Speech.live(locale: app.language, vocab: app.vocab) { _ in }
+      state.partial = ""
+      let l = try await Speech.live(locale: app.language, vocab: app.vocab) { t in
+        Task { @MainActor in Flow.shared.partial(t) }
+      }
       live = l
       sink.set(l)
       set(.listening)
@@ -67,6 +81,7 @@ final class Flow {
 
   func finish() async {
     guard phase == .listening, let l = live, let app else { return }
+    state.partial = ""
     set(.working)
     sink.set(nil)
     live = nil
@@ -89,6 +104,15 @@ final class Flow {
     set(.off)
   }
 
+  private var lastPartial = Date.distantPast
+
+  private func partial(_ t: String) {
+    guard phase == .listening, -lastPartial.timeIntervalSinceNow > 0.3 else { return }
+    lastPartial = Date()
+    state.partial = t
+    publish(notify: true)
+  }
+
   private func tick() {
     if capture.state != .recording { end(); return }
     publish(notify: false)
@@ -104,8 +128,8 @@ final class Flow {
     state.phase = p
     publish(notify: true)
     idle?.invalidate()
-    if p == .idle {
-      idle = Timer.scheduledTimer(withTimeInterval: Flow.idleSeconds, repeats: false) { _ in
+    if p == .idle, minutes > 0 {
+      idle = Timer.scheduledTimer(withTimeInterval: Double(minutes) * 60, repeats: false) { _ in
         MainActor.assumeIsolated { Flow.shared.end() }
       }
     }

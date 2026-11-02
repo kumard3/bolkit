@@ -77,16 +77,23 @@ class KeyboardViewController: UIInputViewController, KeyboardHost {
     let s = FlowShared.read()
     guard visible else { return }
     let phase = s.alive ? s.phase : .off
-    board.setMic(phase == .listening ? .listening : phase == .working ? .working : .ready)
-    switch phase {
-    case .listening: board.setStatus("Listening. Tap the mic when done")
-    case .working: board.setStatus("Writing")
-    default: board.setStatus(s.error)
-    }
     if phase == .idle || phase == .off, !s.resultID.isEmpty, s.resultID != lastInserted, -s.resultAt.timeIntervalSinceNow < 20 {
       lastInserted = s.resultID
       UserDefaults.standard.set(lastInserted, forKey: "lastResult")
-      if !s.resultText.isEmpty { insert(s.resultText) }
+      if !s.resultText.isEmpty {
+        insert(s.resultText)
+        board.setMic(.done)
+        board.setStatus("Inserted")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.refresh() }
+        return
+      }
+    }
+    board.setMic(phase == .listening ? .listening : phase == .working ? .working : .ready)
+    switch phase {
+    case .listening: board.setStatus(s.partial.isEmpty ? "Listening. Tap the mic when done" : String(s.partial.suffix(70)))
+    case .working: board.setStatus("Writing")
+    case .idle: board.setStatus(s.error ?? (-s.resultAt.timeIntervalSinceNow < 1.5 && s.resultText.isEmpty ? "Heard nothing" : nil))
+    default: board.setStatus(s.error)
     }
   }
 

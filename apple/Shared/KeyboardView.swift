@@ -17,7 +17,7 @@ import UIKit
   func mic()
 }
 
-enum MicState { case ready, listening, working }
+enum MicState { case ready, listening, working, done }
 
 enum Layer { case letters, numbers, symbols }
 
@@ -290,7 +290,7 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
         case .globe: symbol = "globe"
         case .layer(let l): title = l == .letters ? "ABC" : l == .numbers ? "123" : "#+="
         case .mic:
-          symbol = micState == .listening ? "waveform" : "mic.fill"
+          symbol = micState == .listening ? "waveform" : micState == .done ? "checkmark" : "mic.fill"
           if micState == .listening { fill = .systemRed; tint = .white }
           if micState == .working { tint = tint.withAlphaComponent(0.4) }
         case .ret:
@@ -300,6 +300,18 @@ final class KeyboardView: UIInputView, UIInputViewAudioFeedback {
           if Self.accent(ret) && (!goes || !(host?.before.isEmpty ?? true)) { fill = .systemBlue; tint = .white }
         }
         k.backgroundColor = fill
+        if k.kind == .mic {
+          k.layer.removeAnimation(forKey: "pulse")
+          if micState == .listening {
+            let a = CABasicAnimation(keyPath: "opacity")
+            a.fromValue = 1
+            a.toValue = 0.55
+            a.duration = 0.7
+            a.autoreverses = true
+            a.repeatCount = .infinity
+            k.layer.add(a, forKey: "pulse")
+          }
+        }
         k.label.text = title
         k.label.textColor = tint
         k.label.font = .systemFont(ofSize: size, weight: .regular)
