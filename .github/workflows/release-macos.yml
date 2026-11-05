@@ -84,8 +84,8 @@ jobs:
               --account ai.scribe.mac.updates \
               --ed-key-file - \
               --download-url-prefix \
-                "https://github.com/kumard3/scribe/releases/download/${GITHUB_REF_NAME}" \
-              --link "https://github.com/kumard3/scribe" \
+                "https://github.com/kumard3/bolkit/releases/download/${GITHUB_REF_NAME}" \
+              --link "https://github.com/kumard3/bolkit" \
               --phased-rollout-interval 86400 \
               --maximum-versions 5 \
               dist

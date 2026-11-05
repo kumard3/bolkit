@@ -3,7 +3,7 @@
 Bolkit (named Scribe up to 1.3.0) uses Sparkle 2, since 1.3.0, for automatic updates. The app checks this
 feed on launch and users can also choose **Check for Updates…**:
 
-`https://github.com/kumard3/scribe/releases/download/scribe-macos-updates/appcast.xml`
+`https://github.com/kumard3/bolkit/releases/download/scribe-macos-updates/appcast.xml`
 
 Updates are rolled out in daily Sparkle cohorts. The archive, appcast, and
 release notes are signed with the app's Ed25519 key. The private key is stored in

@@ -1,7 +1,7 @@
 export const SITE_URL = 'https://bolkit-site.kumard3.workers.dev';
 export const SITE_NAME = 'Bolkit';
 
-export const REPO = 'https://github.com/kumard3/scribe';
+export const REPO = 'https://github.com/kumard3/bolkit';
 export const RELEASES = `${REPO}/releases`;
 export const AUTHOR = 'kumard3';
 

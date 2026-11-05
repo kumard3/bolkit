@@ -2,7 +2,7 @@
 
 Free on-device dictation. Speak, and text appears in whatever app you are using. Audio never leaves your device: no servers, no account, no API keys, no cost.
 
-**[Download the latest release](https://github.com/kumard3/scribe/releases/latest)** · [Website](https://scribe-site.kumard3.workers.dev)
+**[Download the latest release](https://github.com/kumard3/bolkit/releases/latest)** · [Website](https://scribe-site.kumard3.workers.dev)
 
 ## Platforms
 

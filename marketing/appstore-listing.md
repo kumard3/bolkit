@@ -77,11 +77,11 @@ Full paste-ready version, answering Apple's 2026-08-14 guideline 2.1 request:
 - No account required, so no demo credentials are needed.
 - Dictation works immediately with no download. The default model is `system`,
   the phone's built-in speech engine. Downloads in Models are all optional.
-- Source: https://github.com/kumard3/scribe
+- Source: https://github.com/kumard3/bolkit
 
 ## URLs
 
-- Support: https://github.com/kumard3/scribe/issues
+- Support: https://github.com/kumard3/bolkit/issues
 - Marketing: https://bolkit-site.kumard3.workers.dev
 - Privacy: https://bolkit-site.kumard3.workers.dev/privacy
 

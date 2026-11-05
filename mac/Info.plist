@@ -35,7 +35,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://github.com/kumard3/scribe/releases/download/scribe-macos-updates/appcast.xml</string>
+	<string>https://github.com/kumard3/bolkit/releases/download/scribe-macos-updates/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>392y2U3Mwui9AdO4Ze4yCcq3rat3zy71xgwIr2+dygw=</string>
 </dict>

@@ -324,7 +324,7 @@ health, financial, gambling, or medical functionality. All speech models are
 publicly released open-weight models under MIT, Apache 2.0 or CC-BY licences
 (OpenAI Whisper, MIT; NVIDIA NeMo via k2-fsa/sherpa-onnx, Apache 2.0/CC-BY;
 Google Gemma, Gemma Terms of Use). The app's own source is MIT and public at
-https://github.com/kumard3/scribe.
+https://github.com/kumard3/bolkit.
 
 TESTED ON
 iPhone 17 Pro (iPhone18,1), iOS 26.5.2 (build 23F84), via TestFlight build
