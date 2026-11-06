@@ -8,8 +8,8 @@ settings:
   base:
     APP_BUNDLE_ID: ai.localvoice.native
     APP_DISPLAY_NAME: Bolkit Dev
-    MARKETING_VERSION: 1.1.0
-    CURRENT_PROJECT_VERSION: 13
+    MARKETING_VERSION: 1.2.0
+    CURRENT_PROJECT_VERSION: 14
     DEVELOPMENT_TEAM: Q84L632A4A
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
@@ -35,7 +35,6 @@ targets:
       - package: FluidAudio
       - package: DesertAnt
         product: Voz
-      - target: BolkitKeyboard
       - target: BolkitWidget
     settings:
       base:
@@ -69,28 +68,6 @@ targets:
           - UIApplicationShortcutItemType: history
             UIApplicationShortcutItemTitle: History
             UIApplicationShortcutItemIconSymbolName: clock
-  BolkitKeyboard:
-    type: app-extension
-    platform: iOS
-    sources: [BolkitKeyboard]
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID).ScribeKeyboard
-        TARGETED_DEVICE_FAMILY: "1"
-    info:
-      path: BolkitKeyboard/Info.plist
-      properties:
-        CFBundleDisplayName: Bolkit Voice
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.keyboard-service
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
-          NSExtensionAttributes:
-            IsASCIICapable: false
-            PrefersRightToLeft: false
-            PrimaryLanguage: en-US
-            RequestsOpenAccess: true
   BolkitWidget:
     type: app-extension
     platform: iOS
