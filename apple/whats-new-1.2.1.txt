@@ -1,0 +1,3 @@
+Bolkit 1.2.1 is a performance fix.
+
+- Voz no longer re-checks its whole model file each time you open Settings or start dictating, so dictation starts faster and uses less battery.

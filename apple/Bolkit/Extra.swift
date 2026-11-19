@@ -59,7 +59,13 @@ enum Extra {
       .filter { $0.lastPathComponent.lowercased().contains(key) }
   }
 
-  static func vozInstalled() -> Bool { Voz.isDownloaded(cacheRoot: appSupport) }
+  // Voz.isDownloaded() SHA-256s the whole 400 MB model; views and every dictation start call this.
+  nonisolated(unsafe) private static var vozVerified = false
+  static func vozInstalled() -> Bool {
+    if vozVerified, FileManager.default.fileExists(atPath: appSupport + "/desert-ant-models") { return true }
+    vozVerified = Voz.isDownloaded(cacheRoot: appSupport)
+    return vozVerified
+  }
   static func vozDownload(_ p: @escaping @Sendable (Double) -> Void) async throws {
     try await Voz.download(cacheRoot: appSupport) { p($0.fraction) }
   }
