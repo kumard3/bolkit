@@ -182,9 +182,9 @@ struct MeetingDetailView: View {
           Picker("", selection: $clip) {
             ForEach(clips.indices, id: \.self) { Text("Screen clip \($0 + 1)").tag($0) }
           }
-          .pickerStyle(.segmented)
+          .pickerStyle(.menu)
           .labelsHidden()
-          .frame(maxWidth: 360)
+          .fixedSize()
           .onChange(of: clip) { _, i in
             video.pause()
             video.replaceCurrentItem(with: AVPlayerItem(url: clips[i]))
@@ -233,53 +233,57 @@ struct MeetingDetailView: View {
   private var header: some View {
     let date = (try? dir.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
     let speakers = detail?.speakers.count
-    return HStack(alignment: .top) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(date.formatted(date: .complete, time: .shortened))
-          .font(.system(size: 22, weight: .bold)).foregroundColor(Mono.text)
-        Text(clock(player.duration) + (speakers.map { "  ·  \($0) speaker\($0 == 1 ? "" : "s")" } ?? "") + "  ·  ID \(dir.lastPathComponent)")
-          .font(.system(size: 12)).foregroundColor(Mono.textDim).monospacedDigit()
-          .textSelection(.enabled)
-      }
-      Spacer()
-      HStack(spacing: 8) {
-        Button("Copy") {
-          NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(detail?.fileText ?? "", forType: .string)
-        }
-        .disabled(detail == nil)
-        Button(copiedForAgent ? "Copied ID" : "Copy ID for AI") {
-          Task {
-            await AgentExport.write(dir: dir)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(AgentExport.prompt(dir: dir), forType: .string)
-            copiedForAgent = true
-          }
-        }
-        .disabled(detail == nil)
-        .help("Copies the meeting id so an AI agent can read it through the bolkit MCP server (agent.md is written as a fallback)")
-        Menu {
-          ShareLink("Share…", items: shareFiles)
-            .disabled(shareFiles.isEmpty)
-          Button("Save to iCloud Drive, Google Drive or another folder…") { saveCopy() }
-          Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([dir]) }
-        } label: { Image(systemName: "square.and.arrow.up") }
-          .menuIndicator(.hidden)
-          .fixedSize()
-          .help("Share the audio, transcript and summary, or save a copy to the cloud. Screen videos stay on this Mac.")
-        Button(detail == nil ? "Transcribe" : "Re-transcribe") { meeting.enqueue(dir) }
-          .disabled(meeting.state(dir) == .queued || meeting.processing == dir)
-        Button {
-          player.stop()
-          video?.pause()
-          meeting.delete(dir)
-        } label: { Image(systemName: "trash") }
-          .help("Move this meeting to the Trash")
-          .disabled(meeting.processing == dir)
-      }
-      .fixedSize()
-      .font(.system(size: 12))
+    let title = VStack(alignment: .leading, spacing: 4) {
+      Text(date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().year().hour().minute()))
+        .font(.system(size: 22, weight: .bold)).foregroundColor(Mono.text).lineLimit(1)
+      Text(clock(player.duration) + (speakers.map { "  ·  \($0) speaker\($0 == 1 ? "" : "s")" } ?? "") + "  ·  ID \(dir.lastPathComponent)")
+        .font(.system(size: 12)).foregroundColor(Mono.textDim).monospacedDigit()
+        .textSelection(.enabled)
     }
+    return ViewThatFits(in: .horizontal) {
+      HStack(alignment: .top) { title; Spacer(); actions }
+      VStack(alignment: .leading, spacing: 12) { title; actions }
+    }
+  }
+
+  private var actions: some View {
+    HStack(spacing: 8) {
+      Button("Copy") {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(detail?.fileText ?? "", forType: .string)
+      }
+      .disabled(detail == nil)
+      Button(copiedForAgent ? "Copied ID" : "Copy ID for AI") {
+        Task {
+          await AgentExport.write(dir: dir)
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString(AgentExport.prompt(dir: dir), forType: .string)
+          copiedForAgent = true
+        }
+      }
+      .disabled(detail == nil)
+      .help("Copies the meeting id so an AI agent can read it through the bolkit MCP server (agent.md is written as a fallback)")
+      Menu {
+        ShareLink("Share…", items: shareFiles)
+          .disabled(shareFiles.isEmpty)
+        Button("Save to iCloud Drive, Google Drive or another folder…") { saveCopy() }
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([dir]) }
+      } label: { Image(systemName: "square.and.arrow.up") }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Share the audio, transcript and summary, or save a copy to the cloud. Screen videos stay on this Mac.")
+      Button(detail == nil ? "Transcribe" : "Re-transcribe") { meeting.enqueue(dir) }
+        .disabled(meeting.state(dir) == .queued || meeting.processing == dir)
+      Button {
+        player.stop()
+        video?.pause()
+        meeting.delete(dir)
+      } label: { Image(systemName: "trash") }
+        .help("Move this meeting to the Trash")
+        .disabled(meeting.processing == dir)
+    }
+    .fixedSize()
+    .font(.system(size: 12))
   }
 
   private var shareFiles: [URL] {
