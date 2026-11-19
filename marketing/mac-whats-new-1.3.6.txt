@@ -1,0 +1,8 @@
+New in 1.3.6:
+- Much lighter while recording meetings: the app window no longer re-checks model files every second, which used most of a CPU core.
+- Voz, a new English speech model that runs on the Neural Engine, for dictation and meetings, with optional Who speaker detection.
+- Separate model pickers for dictation and meetings.
+- Ask your AI assistant about past meetings: Bolkit can serve your meetings and dictations to MCP clients, all on your Mac.
+- Better meeting notes: decisions and suggestions with owners and timestamps, chapters, generated titles and your name in place of "You".
+- The recording island follows the screen your pointer is on and stays put after display changes.
+- Bolkit now needs macOS 15 or later.
