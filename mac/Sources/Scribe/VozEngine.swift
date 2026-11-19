@@ -12,7 +12,13 @@ actor VozEngine {
     let end: Double
   }
 
-  nonisolated static var downloaded: Bool { Voz.isDownloaded() }
+  // Voz.isDownloaded() SHA-256s the whole 400 MB model; SwiftUI bodies call this every timer tick.
+  nonisolated(unsafe) private static var verified = false
+  nonisolated static var downloaded: Bool {
+    if verified, FileManager.default.fileExists(atPath: cacheDir.path) { return true }
+    verified = Voz.isDownloaded()
+    return verified
+  }
   nonisolated static var cacheDir: URL {
     FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("desert-ant-models", isDirectory: true)
