@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <title>Bolkit, who said what</title>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg:#000; --surface:#141416; --line:#2a2a2e; --ink:#f5f5f7; --ink2:#b6b6bd; --ink3:#8e8e96; --rahul:#8fb4ff; --maya:#9fdca8; --leo:#f7c07a; --red:#ff453a; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { width:1920px; height:1080px; overflow:hidden; background:var(--bg); }
+    body { font-family:"Hanken Grotesk", sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; }
+    #root { position:relative; width:1920px; height:1080px; overflow:hidden; background:var(--bg); }
+    #leak { position:absolute; left:-400px; top:-300px; width:2700px; height:1700px; background:linear-gradient(115deg, rgba(255,255,255,0) 32%, rgba(255,255,255,.06) 48%, rgba(255,255,255,0) 64%); }
+    #vignette { position:absolute; inset:0; background:radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 45%, rgba(0,0,0,.8) 100%); }
+    .scene { position:absolute; inset:0; }
+    .kicker { font-family:"JetBrains Mono", monospace; font-size:24px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink3); }
+    .display { font-family:"Bricolage Grotesque", sans-serif; font-weight:700; letter-spacing:-.03em; line-height:1; }
+
+    #s1-kicker { position:absolute; left:0; right:0; top:250px; text-align:center; }
+    #s1-line { position:absolute; left:0; right:0; top:330px; text-align:center; font-size:190px; }
+    #mix { position:absolute; left:0; top:640px; width:3840px; height:220px; display:flex; align-items:center; gap:8px; }
+    #mix i { display:block; width:8px; border-radius:4px; background:#6d6d75; }
+
+    #s2-cap { position:absolute; left:160px; top:150px; width:1600px; height:120px; }
+    .cap { position:absolute; left:0; top:0; font-family:"Bricolage Grotesque", sans-serif; font-weight:600; font-size:76px; letter-spacing:-.02em; }
+    #lanes { position:absolute; left:160px; top:360px; width:1600px; }
+    .lane { position:relative; height:110px; display:flex; align-items:center; border-top:1px solid var(--line); }
+    .lane:last-child { border-bottom:1px solid var(--line); }
+    .lane b { width:200px; font-weight:600; font-size:40px; }
+    .track { position:relative; flex:1; height:44px; }
+    .seg { position:absolute; top:0; height:44px; border-radius:10px; transform-origin:left center; }
+    #playhead { position:absolute; top:-20px; width:2px; height:480px; background:var(--ink); left:200px; }
+
+    #s3-copy { position:absolute; left:140px; top:0; width:660px; height:1080px; display:flex; flex-direction:column; justify-content:center; gap:28px; }
+    #s3-line { font-size:84px; }
+    #s3-sub { font-size:32px; color:var(--ink2); line-height:1.35; }
+    #s3-frame { position:absolute; left:860px; top:110px; width:960px; height:860px; overflow:hidden; border-radius:26px; border:1px solid var(--line); background:#000; }
+    #s3-shot { position:absolute; left:0; top:0; width:1520px; height:1400px; transform-origin:0 0; }
+    #s3-shot img { position:absolute; left:0; top:0; width:1520px; height:1400px; }
+    .hl { position:absolute; left:76px; height:44px; border-radius:8px; background:rgba(255,255,255,.28); outline:2px solid rgba(255,255,255,.55); transform-origin:left center; }
+
+    #s4-kicker { position:absolute; left:0; right:0; top:230px; text-align:center; }
+    #s4-num { position:absolute; left:0; right:0; top:320px; text-align:center; font-size:250px; font-variant-numeric:tabular-nums; }
+    #s4-gauge { position:absolute; left:460px; top:640px; width:1000px; height:18px; border-radius:9px; background:var(--surface); border:1px solid var(--line); overflow:hidden; }
+    #s4-fill { position:absolute; left:0; top:0; height:100%; width:100%; background:var(--ink); transform-origin:left center; }
+    #s4-sub { position:absolute; left:0; right:0; top:690px; text-align:center; font-size:32px; color:var(--ink2); }
+    #s4-local { position:absolute; left:0; right:0; top:800px; text-align:center; font-family:"Bricolage Grotesque", sans-serif; font-weight:600; font-size:64px; }
+
+    #s5-mark { position:absolute; left:660px; top:210px; width:600px; height:311px; }
+    #s5-word { position:absolute; left:0; right:0; top:560px; text-align:center; font-size:150px; }
+    #s5-meta { position:absolute; left:0; right:0; top:760px; text-align:center; font-size:36px; color:var(--ink2); }
+    #s5-meta span { color:var(--ink); }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="23.4">
+    <div id="leak"></div>
+    <div id="vignette"></div>
+
+    <section id="s1" class="scene clip" data-start="0" data-duration="3.357" data-track-index="1">
+      <div id="mix" data-layout-allow-overflow></div>
+      <div id="s1-kicker" class="kicker">bolkit · meetings</div>
+      <div id="s1-line" class="display">who said that?</div>
+    </section>
+
+    <section id="s2" class="scene clip" data-start="2.857" data-duration="6.214" data-track-index="2">
+      <div id="s2-cap">
+        <div class="cap" id="cap-a">Bolkit splits every call by voice.</div>
+        <div class="cap" id="cap-b">On Zoom, or around one table.</div>
+      </div>
+      <div id="lanes">
+        <div class="lane" id="lane-0"><b>You</b><div class="track" id="track-0"></div></div>
+        <div class="lane" id="lane-1"><b style="color:var(--rahul)">Rahul</b><div class="track" id="track-1"></div></div>
+        <div class="lane" id="lane-2"><b style="color:var(--maya)">Maya</b><div class="track" id="track-2"></div></div>
+        <div class="lane" id="lane-3"><b style="color:var(--leo)">Leo</b><div class="track" id="track-3"></div></div>
+        <div id="playhead"></div>
+      </div>
+    </section>
+
+    <section id="s3" class="scene clip" data-start="8.571" data-duration="6.215" data-track-index="3">
+      <div id="s3-copy">
+        <div class="kicker">the real transcript</div>
+        <div id="s3-line" class="display">It names people when they say it.</div>
+        <div id="s3-sub">"I'm Maya." "This is Leo." Nobody types a name.</div>
+      </div>
+      <div id="s3-frame">
+        <div id="s3-shot">
+          <img src="assets/ui/meeting-Transcript.png" alt="Bolkit meeting transcript" />
+          <div class="hl" id="hl-0" style="top:574px; width:96px"></div>
+          <div class="hl" id="hl-1" style="top:678px; width:84px"></div>
+          <div class="hl" id="hl-2" style="top:886px; width:62px"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s4" class="scene clip" data-start="14.286" data-duration="6.214" data-track-index="4">
+      <div id="s4-kicker" class="kicker">an 11-minute call · on the mac</div>
+      <div id="s4-num" class="display"><span id="clk">11:00</span></div>
+      <div id="s4-gauge"><div id="s4-fill"></div></div>
+      <div id="s4-sub">transcribed, split by speaker, named and summed up · measured on an 18 GB MacBook</div>
+      <div id="s4-local">Nothing leaves your Mac.</div>
+    </section>
+
+    <section id="s5" class="scene clip" data-start="20" data-duration="3.4" data-track-index="5">
+      <svg id="s5-mark" viewBox="160 323 701 363"><path id="s5-wave" d="M180 520 C236 520 236 553 292 553 C342 553 342 343 392 343 C441 343 441 666 490 666 C547.5 666 547.5 469 605 469 C664.5 469 664.5 520 724 520 C757 520 757 520 790 520" fill="none" stroke="#f5f5f7" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div id="s5-word" class="display">Bolkit</div>
+      <div id="s5-meta"><span>free for Mac</span> · github.com/kumard3/scribe</div>
+    </section>
+
+    <audio id="music" src="assets/music/bolkit-pulse-84.wav" data-start="0" data-duration="23.4" data-track-index="10" data-volume="0.7" data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0},{"t":0.3,"v":1},{"t":22.2,"v":1},{"t":23.4,"v":0}]}]}'></audio>
+    <audio id="sfx-1" src="assets/sfx/interface/bong_001.ogg" data-start="3.157" data-duration="0.123" data-track-index="30" data-volume="0.35"></audio>
+    <audio id="sfx-2" src="assets/sfx/interface/bong_001.ogg" data-start="3.871" data-duration="0.123" data-track-index="31" data-volume="0.35"></audio>
+    <audio id="sfx-3" src="assets/sfx/interface/bong_001.ogg" data-start="4.586" data-duration="0.123" data-track-index="32" data-volume="0.35"></audio>
+    <audio id="sfx-4" src="assets/sfx/interface/bong_001.ogg" data-start="5.3" data-duration="0.123" data-track-index="33" data-volume="0.35"></audio>
+    <audio id="sfx-5" src="assets/sfx/interface/switch_007.ogg" data-start="9.071" data-duration="0.614" data-track-index="34" data-volume="0.4"></audio>
+    <audio id="sfx-6" src="assets/sfx/impact/impactGlass_light_001.ogg" data-start="16.886" data-duration="0.210" data-track-index="35" data-volume="0.35"></audio>
+    <audio id="sfx-7" src="assets/sfx/impact/impactBell_heavy_003.ogg" data-start="20.1" data-duration="0.654" data-track-index="36" data-volume="0.4"></audio>
+  </div>
+
+  <script>
+    const S1 = 0, S2 = 2.857, S3 = 8.571, S4 = 14.286, S5 = 20, END = 23.4, BEAT = 60 / 84;
+    // real turn timings (seconds) of the demo meeting the pipeline processed; lanes: 0 You, 1 Rahul, 2 Maya, 3 Leo
+    const TURNS = [[1, 0, 3.82], [2, 4.27, 8.25], [0, 8.7, 12.08], [3, 12.53, 17.31], [1, 17.76, 22.16], [0, 22.61, 25.55]];
+    const LEN = 26, SWEEP_AT = S2 + 0.9, SWEEP = 4.2;
+    const COLORS = ["#f5f5f7", "#8fb4ff", "#9fdca8", "#f7c07a"];
+
+    const mix = document.getElementById("mix");
+    for (let i = 0; i < 240; i++) {
+      const h = 18 + 150 * Math.abs(Math.sin(i * 0.37) * 0.6 + Math.sin(i * 0.11 + 1.3) * 0.4) * (0.55 + 0.45 * Math.abs(Math.sin(i * 0.053)));
+      const bar = document.createElement("i");
+      bar.style.height = h.toFixed(1) + "px";
+      mix.appendChild(bar);
+    }
+    TURNS.forEach(([lane, a, z], k) => {
+      const seg = document.createElement("div");
+      seg.className = "seg";
+      seg.id = "seg-" + k;
+      seg.style.left = (a / LEN * 100).toFixed(2) + "%";
+      seg.style.width = ((z - a) / LEN * 100).toFixed(2) + "%";
+      seg.style.background = COLORS[lane];
+      document.getElementById("track-" + lane).appendChild(seg);
+    });
+
+    window.__timelines = window.__timelines || {};
+    const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#leak", { x: -260 }, { x: 260, duration: END, ease: "sine.inOut" }, 0);
+
+    // s1: the mixed waveform crawls, the question lands and holds
+    tl.fromTo("#mix", { x: 0 }, { x: -700, duration: 3.4, ease: "none" }, 0);
+    tl.fromTo("#s1-kicker", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 0.15);
+    tl.fromTo("#s1-line", { opacity: 0, scale: 1.08, filter: "blur(14px)" }, { opacity: 1, scale: 1, filter: "blur(0px)", duration: 0.55, ease: "expo.out" }, 0.35);
+    tl.to("#s1", { opacity: 0, filter: "blur(16px)", duration: 0.5, ease: "power2.in" }, S2);
+
+    // s2: lanes arrive one per beat, then the playhead lights each real turn in its lane
+    tl.fromTo("#s2", { opacity: 0 }, { opacity: 1, duration: 0.4 }, S2);
+    [0, 1, 2, 3].forEach((i) => {
+      tl.fromTo("#lane-" + i, { opacity: 0, x: -40 }, { opacity: 1, x: 0, duration: 0.45, ease: "expo.out" }, S2 + 0.3 + i * BEAT); // beat-grid
+    });
+    tl.fromTo("#cap-a", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, S2 + 0.2);
+    tl.to("#cap-a", { opacity: 0, y: -20, duration: 0.35, ease: "power2.in" }, S2 + 2.95);
+    tl.fromTo("#cap-b", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, S2 + 3.2);
+    tl.fromTo("#playhead", { x: 0, opacity: 0 }, { x: 1400, opacity: 1, duration: SWEEP, ease: "none" }, SWEEP_AT);
+    TURNS.forEach(([, a, z], k) => {
+      tl.fromTo("#seg-" + k, { scaleX: 0 }, { scaleX: 1, duration: (z - a) / LEN * SWEEP, ease: "none" }, SWEEP_AT + a / LEN * SWEEP);
+    });
+    tl.to("#s2", { opacity: 0, filter: "blur(16px)", duration: 0.5, ease: "power2.in" }, S3);
+
+    // s3: the real transcript rises, pushes in, names highlight on beats
+    tl.fromTo("#s3", { opacity: 0 }, { opacity: 1, duration: 0.45 }, S3);
+    tl.fromTo("#s3-copy", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.6, ease: "power3.out" }, S3 + 0.2);
+    tl.fromTo("#s3-frame", { opacity: 0, y: 80 }, { opacity: 1, y: 0, duration: 0.8, ease: "expo.out" }, S3 + 0.5); // beat-locked: 9.07s
+    tl.fromTo("#s3-shot", { scale: 0.63, x: 0, y: 0 }, { scale: 0.98, x: -40, y: -450, duration: 2.2, ease: "power2.inOut" }, S3 + 0.9);
+    tl.to("#s3-shot", { y: -480, duration: 2.5, ease: "none" }, S3 + 3.1);
+    [0, 1, 2].forEach((i) => {
+      tl.fromTo("#hl-" + i, { scaleX: 0 }, { scaleX: 1, duration: 0.3, ease: "power2.out" }, S3 + 2.9 + i * BEAT); // beat-grid, one per beat, each held to scene end
+    });
+    tl.to("#s3", { opacity: 0, filter: "blur(16px)", duration: 0.5, ease: "power2.in" }, S4);
+
+    // s4: the clock runs from the call's 11:00 down to the measured 3:03 processing time
+    tl.fromTo("#s4", { opacity: 0 }, { opacity: 1, duration: 0.4 }, S4);
+    tl.fromTo("#s4-kicker", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, S4 + 0.2);
+    tl.fromTo("#s4-num", { opacity: 0, filter: "blur(12px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.5, ease: "expo.out" }, S4 + 0.3);
+    tl.fromTo("#s4-gauge", { opacity: 0 }, { opacity: 1, duration: 0.3 }, S4 + 0.3);
+    const clk = { v: 660 };
+    tl.fromTo("#s4-fill", { scaleX: 1 }, { scaleX: 183 / 660, duration: 1.6, ease: "power3.inOut" }, S4 + 1.0);
+    tl.fromTo(clk, { v: 660 }, { v: 183, duration: 1.6, ease: "power3.inOut", onUpdate: () => { const v = Math.round(clk.v); document.getElementById("clk").textContent = Math.floor(v / 60) + ":" + String(v % 60).padStart(2, "0"); } }, S4 + 1.0);
+    tl.fromTo("#s4-sub", { opacity: 0 }, { opacity: 1, duration: 0.4 }, S4 + 1.4);
+    tl.fromTo("#s4-local", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, S4 + 3.0);
+    tl.to("#s4", { opacity: 0, filter: "blur(16px)", duration: 0.5, ease: "power2.in" }, S5);
+
+    // s5: outro
+    const wave = document.getElementById("s5-wave");
+    const wLen = wave.getTotalLength();
+    wave.setAttribute("stroke-dasharray", String(wLen));
+    tl.fromTo("#s5", { opacity: 0 }, { opacity: 1, duration: 0.3 }, S5);
+    tl.fromTo("#s5-wave", { attr: { "stroke-dashoffset": wLen } }, { attr: { "stroke-dashoffset": 0 }, duration: 0.9, ease: "power2.inOut" }, S5 + 0.1); // beat-locked: 20.1s (bar 8)
+    tl.fromTo("#s5-word", { opacity: 0, y: 30, filter: "blur(10px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.6, ease: "power3.out" }, S5 + 0.5);
+    tl.fromTo("#s5-meta", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, S5 + 1.1);
+
+    window.__timelines["main"] = tl;
+  </script>
+</body>
+</html>

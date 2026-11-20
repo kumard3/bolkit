@@ -1,0 +1,1 @@
+so i made an app that types whatever i say, even when i mix hindi and english. bolkit runs on mac, iphone, android, windows and linux, with the most efficient memory management, and its free

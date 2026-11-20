@@ -22,7 +22,10 @@ struct SpeakerTurn {
 enum Diarizer {
   /// `numSpeakers <= 0` lets the clusterer decide. A user-set count is strongly
   /// preferred: auto-clustering over-segments long calls badly.
-  static func diarize(samples: [Float], sampleRate: Int, numSpeakers: Int) -> [SpeakerSegment] {
+  static func diarize(
+    samples: [Float], sampleRate: Int, numSpeakers: Int,
+    threshold: Float = 0.8, minOn: Float = 0.3, minOff: Float = 0.5
+  ) -> [SpeakerSegment] {
     guard let seg = SupportModelStore.diarSegPath(),
           let emb = SupportModelStore.diarEmbPath() else {
       dlog("diarize: models missing")
@@ -42,9 +45,9 @@ enum Diarizer {
     cfg.embedding.provider = UnsafePointer(provider)
     cfg.clustering.num_clusters = numSpeakers > 0 ? Int32(numSpeakers) : -1
     // 0.5 over-splits noisy real calls (a 42-min call auto-detected 116 speakers).
-    cfg.clustering.threshold = 0.8
-    cfg.min_duration_on = 0.3
-    cfg.min_duration_off = 0.5
+    cfg.clustering.threshold = threshold
+    cfg.min_duration_on = minOn
+    cfg.min_duration_off = minOff
 
     guard let sd = SherpaOnnxCreateOfflineSpeakerDiarization(&cfg) else {
       dlog("diarize: create failed")

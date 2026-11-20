@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <title>Bolkit, voice-led</title>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg:#000; --panel:#0b0b0d; --panel2:#131316; --line:#26262b; --ink:#f5f5f7; --ink2:#b6b6bd; --ink3:#8e8e96; --red:#ff453a; --green:#30d158; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { width:1920px; height:1080px; overflow:hidden; background:var(--bg); }
+    body { font-family:"Hanken Grotesk", sans-serif; color:var(--ink); -webkit-font-smoothing:antialiased; }
+    #root { position:relative; width:1920px; height:1080px; overflow:hidden; background:var(--bg); }
+
+    #leak { position:absolute; left:-400px; top:-300px; width:2700px; height:1700px; background:linear-gradient(115deg, rgba(255,255,255,0) 30%, rgba(255,255,255,.07) 48%, rgba(255,255,255,0) 66%); }
+    #motif { position:absolute; left:-240px; top:300px; width:2400px; height:1243px; opacity:.5; }
+    #motif path { stroke:#2a2a30; }
+    #vignette { position:absolute; inset:0; background:radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 45%, rgba(0,0,0,.75) 100%); }
+
+    .scene { position:absolute; inset:0; }
+    .stage { position:absolute; inset:0; perspective:1900px; perspective-origin:50% 38%; }
+    .plane { position:absolute; transform-style:preserve-3d; }
+
+    .cap { position:absolute; left:140px; right:140px; text-align:center; font-family:"Bricolage Grotesque", sans-serif; font-weight:700; letter-spacing:-.03em; line-height:1.05; color:var(--ink); }
+    .cap .w { display:inline-block; opacity:0; }
+    .cap.low { top:800px; font-size:86px; }
+    .cap.mid { top:420px; font-size:150px; }
+
+    #s1-kicker { position:absolute; left:0; right:0; top:330px; text-align:center; font-family:"JetBrains Mono", monospace; font-size:26px; letter-spacing:.3em; color:var(--ink3); opacity:0; }
+
+    #s2-plane { left:470px; top:120px; width:980px; height:560px; }
+    #s2-win { position:absolute; inset:0; background:linear-gradient(180deg,#121215,#0a0a0c); border:2px solid var(--line); border-radius:28px; box-shadow:0 60px 120px rgba(0,0,0,.6); }
+    #s2-to { position:absolute; left:48px; top:40px; font-family:"JetBrains Mono", monospace; font-size:24px; color:var(--ink3); }
+    #s2-field { position:absolute; left:48px; right:48px; top:104px; height:250px; background:var(--panel2); border:2px solid var(--line); border-radius:18px; }
+    #s2-ph { position:absolute; left:40px; top:38px; font-size:44px; color:#6e6e76; }
+    #s2-text { position:absolute; left:40px; top:38px; right:40px; font-size:44px; font-weight:500; line-height:1.3; opacity:0; }
+    #s2-hud { position:absolute; left:490px; top:420px; height:96px; padding:0 44px; transform:translate3d(-50%,0,120px); background:rgba(0,0,0,.9); border:3px solid rgba(255,255,255,.14); border-radius:48px; display:flex; align-items:center; gap:26px; white-space:nowrap; }
+    #s2-bars { display:flex; align-items:center; gap:7px; height:58px; }
+    #s2-bars i { display:block; width:7px; height:8px; border-radius:4px; background:#fff; }
+    #s2-spin { width:30px; height:30px; border-radius:50%; border:4px solid rgba(255,255,255,.25); border-top-color:#fff; display:none; }
+    #s2-check { width:34px; height:34px; border-radius:50%; background:var(--green); color:#000; font-size:22px; font-weight:800; display:none; align-items:center; justify-content:center; }
+    #s2-label { font-size:32px; font-weight:500; color:#fff; }
+
+    #s3-notch { position:absolute; left:560px; top:0; width:800px; height:84px; background:#000; border:2px solid #1d1d21; border-top:0; border-radius:0 0 26px 26px; display:flex; align-items:center; justify-content:space-between; padding:0 46px; opacity:0; }
+    #s3-rec { display:flex; align-items:center; gap:14px; }
+    #s3-dot { width:18px; height:18px; border-radius:50%; background:var(--red); }
+    #s3-timer { font-size:30px; font-weight:600; font-variant-numeric:tabular-nums; }
+    .tw { display:flex; align-items:center; gap:14px; }
+    .tw .bars { display:flex; align-items:center; gap:5px; height:40px; }
+    .tw .bars i { display:block; width:6px; height:8px; border-radius:3px; background:#fff; }
+    .tw .lab { font-family:"JetBrains Mono", monospace; font-size:20px; color:var(--ink3); }
+    #s3-plane { left:385px; top:150px; width:1150px; height:640px; }
+    #s3-crop { position:absolute; inset:0; border-radius:22px; border:2px solid var(--line); overflow:hidden; background:#000; box-shadow:0 60px 120px rgba(0,0,0,.6); }
+    #s3-img { position:absolute; left:0; top:-393px; width:1150px; }
+    .hl { position:absolute; left:40px; width:1070px; height:58px; border:3px solid var(--ink); border-radius:12px; opacity:0; }
+
+    #s4-plane { left:160px; top:150px; width:1600px; height:580px; }
+    .plat { position:absolute; font-family:"Bricolage Grotesque", sans-serif; font-weight:800; letter-spacing:-.045em; line-height:1; color:var(--ink); opacity:0; white-space:nowrap; }
+    #plat-0 { left:60px; top:0px; font-size:180px; }
+    #plat-1 { left:640px; top:40px; font-size:150px; }
+    #plat-2 { left:1090px; top:210px; font-size:130px; }
+    #plat-3 { left:80px; top:250px; font-size:160px; }
+    #plat-4 { left:760px; top:410px; font-size:160px; }
+
+    #s5-mark { position:absolute; left:660px; top:220px; width:600px; height:311px; overflow:visible; }
+    #s5-word { position:absolute; left:0; right:0; top:530px; text-align:center; font-family:"Bricolage Grotesque", sans-serif; font-weight:800; font-size:190px; letter-spacing:-.04em; line-height:1; opacity:0; }
+    #s5-meta { position:absolute; left:0; right:0; top:890px; text-align:center; font-family:"JetBrains Mono", monospace; font-size:30px; color:var(--ink2); opacity:0; }
+    #s5-meta span { color:var(--ink3); }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="28">
+    <div id="leak"></div>
+    <svg id="motif" viewBox="160 323 701 363" data-layout-allow-overflow><path id="motif-path" d="M180 520 C236 520 236 553 292 553 C342 553 342 343 392 343 C441 343 441 666 490 666 C547.5 666 547.5 469 605 469 C664.5 469 664.5 520 724 520 C757 520 757 520 790 520" fill="none" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div id="vignette"></div>
+
+    <section id="s1" class="scene clip" data-start="0" data-duration="3.357" data-track-index="1">
+      <div id="s1-kicker">bolkit</div>
+      <div class="cap mid" id="cap-0"><span class="w" id="w-0-0">so</span> <span class="w" id="w-0-1">i</span> <span class="w" id="w-0-2">made</span> <span class="w" id="w-0-3">an</span> <span class="w" id="w-0-4">app</span> <span class="w" id="w-0-5">that</span> <span class="w" id="w-0-6">types</span> <span class="w" id="w-0-7">whatever</span> <span class="w" id="w-0-8">i</span> <span class="w" id="w-0-9">say.</span></div>
+    </section>
+
+    <section id="s2" class="scene clip" data-start="2.857" data-duration="6.2139999999999995" data-track-index="2">
+      <div class="stage"><div class="plane" id="s2-plane">
+        <div id="s2-win">
+          <div id="s2-to">to: team standup</div>
+          <div id="s2-field"><div id="s2-ph" data-layout-allow-overlap>Message</div><div id="s2-text" data-layout-allow-overlap>kal ka standup 10 baje shift kar do, sab log free hain</div></div>
+        </div>
+        <div id="s2-hud" data-layout-allow-overlap><div id="s2-bars"><i id="hb-0"></i><i id="hb-1"></i><i id="hb-2"></i><i id="hb-3"></i><i id="hb-4"></i><i id="hb-5"></i><i id="hb-6"></i><i id="hb-7"></i></div><div id="s2-spin"></div><div id="s2-check">✓</div><div id="s2-label">Listening</div></div>
+      </div></div>
+      <div class="cap low" id="cap-1"><span class="w" id="w-1-0">even</span> <span class="w" id="w-1-1">when</span> <span class="w" id="w-1-2">i</span> <span class="w" id="w-1-3">mix</span> <span class="w" id="w-1-4">hindi</span> <span class="w" id="w-1-5">and</span> <span class="w" id="w-1-6">english.</span></div>
+    </section>
+
+    <section id="s3" class="scene clip" data-start="8.571" data-duration="6.215" data-track-index="3">
+      <div id="s3-notch">
+        <div id="s3-rec"><div id="s3-dot"></div><div id="s3-timer">14:00</div></div>
+        <div class="tw"><span class="lab">you</span><div class="bars"><i id="ty-0"></i><i id="ty-1"></i><i id="ty-2"></i><i id="ty-3"></i><i id="ty-4"></i></div></div>
+        <div class="tw"><span class="lab">others</span><div class="bars"><i id="to-0"></i><i id="to-1"></i><i id="to-2"></i><i id="to-3"></i><i id="to-4"></i></div></div>
+      </div>
+      <div class="stage"><div class="plane" id="s3-plane">
+        <div id="s3-crop"><img id="s3-img" src="assets/ui/meeting-Transcript.png" alt="" data-layout-allow-overflow />
+          <div class="hl" id="hl-1" style="top:122px"></div><div class="hl" id="hl-2" style="top:201px"></div>
+        </div>
+      </div></div>
+      <div class="cap low" id="cap-2"><span class="w" id="w-2-0">it</span> <span class="w" id="w-2-1">records</span> <span class="w" id="w-2-2">my</span> <span class="w" id="w-2-3">calls</span> <span class="w" id="w-2-4">too,</span> <span class="w" id="w-2-5">and</span> <span class="w" id="w-2-6">it</span> <span class="w" id="w-2-7">knows</span> <span class="w" id="w-2-8">who</span> <span class="w" id="w-2-9">said</span> <span class="w" id="w-2-10">what.</span></div>
+    </section>
+
+    <section id="s4" class="scene clip" data-start="14.286" data-duration="9.071" data-track-index="4">
+      <div class="stage" id="s4-stage"><div class="plane" id="s4-plane">
+        <div class="plat" id="plat-0" data-layout-allow-overlap>mac</div>
+        <div class="plat" id="plat-1" data-layout-allow-overlap>iphone</div>
+        <div class="plat" id="plat-2" data-layout-allow-overlap>android</div>
+        <div class="plat" id="plat-3" data-layout-allow-overlap>windows</div>
+        <div class="plat" id="plat-4" data-layout-allow-overlap>linux</div>
+      </div></div>
+      <div class="cap low" id="cap-3"><span class="w" id="w-3-0">it</span> <span class="w" id="w-3-1">runs</span> <span class="w" id="w-3-2">on</span> <span class="w" id="w-3-3">mac,</span> <span class="w" id="w-3-4">iphone,</span> <span class="w" id="w-3-5">android,</span> <span class="w" id="w-3-6">windows</span> <span class="w" id="w-3-7">and</span> <span class="w" id="w-3-8">linux.</span></div>
+      <div class="cap mid" id="cap-4" style="top:380px; font-size:130px;"><span class="w" id="w-4-0">with</span> <span class="w" id="w-4-1">the</span> <span class="w" id="w-4-2">most</span> <span class="w" id="w-4-3">efficient</span> <span class="w" id="w-4-4">memory</span> <span class="w" id="w-4-5">management.</span></div>
+    </section>
+
+    <section id="s5" class="scene clip" data-start="22.857" data-duration="5.143000000000001" data-track-index="5">
+      <svg id="s5-mark" viewBox="160 323 701 363"><path id="s5-wave" d="M180 520 C236 520 236 553 292 553 C342 553 342 343 392 343 C441 343 441 666 490 666 C547.5 666 547.5 469 605 469 C664.5 469 664.5 520 724 520 C757 520 757 520 790 520" fill="none" stroke="#f5f5f7" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/><rect id="s5-bar" x="821" y="426" width="40" height="170" rx="20" fill="#f5f5f7"/></svg>
+      <div id="s5-word">Bolkit</div>
+      <div class="cap low" id="cap-5" style="top:740px; font-size:70px;"><span class="w" id="w-5-0">it's</span> <span class="w" id="w-5-1">called</span> <span class="w" id="w-5-2">bolkit,</span> <span class="w" id="w-5-3">and</span> <span class="w" id="w-5-4">it's</span> <span class="w" id="w-5-5">free.</span></div>
+      <div id="s5-meta">mac · iphone · android · windows · linux <span>· github.com/kumard3/scribe</span></div>
+    </section>
+
+    <audio id="music" src="assets/music/bolkit-lofi-84.wav" data-start="0" data-duration="28" data-track-index="10" data-volume="0.7" data-automation='{"version":1,"lanes":[{"target":"volume","points":[{"t":0,"v":0},{"t":0.3,"v":1},{"t":26.8,"v":1},{"t":28,"v":0}]}]}'></audio>
+
+    <audio id="sfx-1" src="assets/sfx/interface/drop_002.ogg" data-start="5.8" data-duration="0.191" data-track-index="30" data-volume="0.4"></audio>
+    <audio id="sfx-2" src="assets/sfx/interface/click_002.ogg" data-start="11.429" data-duration="0.01" data-track-index="31" data-volume="0.28"></audio>
+    <audio id="sfx-3" src="assets/sfx/interface/click_002.ogg" data-start="12.143285714285714" data-duration="0.01" data-track-index="32" data-volume="0.28"></audio>
+    <audio id="sfx-4" src="assets/sfx/interface/click_003.ogg" data-start="15.25" data-duration="0.01" data-track-index="33" data-volume="0.22"></audio>
+    <audio id="sfx-5" src="assets/sfx/interface/click_003.ogg" data-start="15.82" data-duration="0.01" data-track-index="34" data-volume="0.22"></audio>
+    <audio id="sfx-6" src="assets/sfx/interface/click_003.ogg" data-start="16.42" data-duration="0.01" data-track-index="35" data-volume="0.22"></audio>
+    <audio id="sfx-7" src="assets/sfx/interface/click_003.ogg" data-start="16.83" data-duration="0.01" data-track-index="36" data-volume="0.22"></audio>
+    <audio id="sfx-8" src="assets/sfx/interface/click_003.ogg" data-start="17.71" data-duration="0.01" data-track-index="37" data-volume="0.22"></audio>
+    <audio id="sfx-9" src="assets/sfx/impact/impactSoft_medium_001.ogg" data-start="22.857" data-duration="0.183" data-track-index="38" data-volume="0.45"></audio>
+  </div>
+
+  <script>
+    const WORDS = [[0.21,0.32,0.4,0.59,0.7,0.85,1.13,1.54,1.85,2.05],[0.11,0.32,0.54,0.64,1,1.26,1.44],[0.11,0.24,0.7,0.99,1.41,1.59,1.77,1.91,2.17,2.35,2.66],[0.1,0.26,0.53,0.7,1.27,1.87,2.28,2.94,3.16],[0.11,0.32,0.5,0.83,1.25,1.55],[0.1,0.29,0.69,1.35,1.51,1.88]];
+    const VO_AT = [0.3,3.3,9,14.55,20.3,23.35];
+    const PLAT_AT = [15.25,15.82,16.42,16.83,17.71];
+    const RMS = [0.04,0.11,0.2,0.25,0.29,0.35,0.39,0.47,0.57,0.53,0.61,0.52,0.52,0.45,0.5,0.52,0.56,0.52,0.48,0.45,0.46,0.43,0.47,0.54,0.46,0.5,0.41,0.39,0.4,0.45,0.43,0.49,0.39,0.37,0.4,0.37,0.38,0.39,0.37,0.41,0.35,0.32,0.3,0.46,0.45,0.47,0.46,0.43,0.45,0.42,0.4,0.41,0.43,0.38,0.37,0.35,0.32,0.38,0.33,0.35,0.34,0.32,0.31,0.28,0.29,0.31,0.3,0.3,0.27,0.28,0.26,0.27,0.25,0.25,0.24,0.24,0.23,0.22,0.23,0.21,0.23,0.2,0.21,0.19,0.19,0.61,0.99,0.93,0.72,0.64,0.71,0.74,0.69,0.69,0.61,0.5,0.56,0.5,0.57,0.54,0.45,0.56,0.53,0.47,0.48,0.44,0.46,0.46,0.41,0.46,0.5,0.43,0.44,0.47,0.43,0.46,0.45,0.46,0.44,0.46,0.39,0.41,0.41,0.42,0.39,0.39,0.37,0.35,0.4,0.38,0.4,0.46,0.41,0.39,0.41,0.4,0.41,0.38,0.39,0.39,0.51,0.94,0.87,0.62,0.57,0.64,0.69,0.71,0.63,0.5,0.46,0.35,0.39,0.49,0.5,0.46,0.46,0.43,0.43,0.45,0.43,0.41,0.4,0.35,0.38,0.38,0.36,0.34,0.32,0.32,0.33,0.63,0.81,0.62,0.76,0.65,0.6,0.57,0.59,0.57,0.52,0.56,0.54,0.56,0.5,0.49,0.51,0.5,0.5,0.45,0.45,0.42,0.42,0.38,0.37,0.39,0.47,0.42,0.4,0.44,0.41,0.43,0.4,0.43,0.4,0.4,0.36,0.34,0.39,0.35,0.4,0.35,0.34,0.33,0.43,0.39,0.41,0.41,0.4,0.43,0.38,0.37,0.36,0.37,0.39,0.37,0.71,0.93,0.61,0.72,0.55,0.57,0.53,0.59,0.53,0.55,0.44,0.42,0.46,0.48,0.45,0.46,0.49,0.45,0.43,0.42,0.39,0.42,0.37,0.39,0.35,0.39,0.35,0.32,0.33,0.33,0.34,0.79,0.6,0.7,0.59,0.39,0.65,0.64,0.39,0.52,0.59,0.44,0.51,0.53,0.43,0.41,0.49,0.44,0.47,0.46,0.43,0.35,0.47,0.41,0.39,0.44,0.39,0.41,0.4,0.39,0.41,0.4,0.38,0.39,0.37,0.34,0.33,0.32,0.36,0.35,0.31,0.31,0.3,0.31,0.33,0.32,0.32,0.34,0.34,0.29,0.29,0.29,0.3,0.32,0.28,0.26,0.87,0.7,0.72,0.6,0.34,0.62,0.66,0.35,0.5,0.59,0.42,0.39,0.49,0.37,0.4,0.45,0.36,0.41,0.42,0.32,0.39,0.36,0.33,0.35,0.3,0.33,0.31,0.28,0.31,0.26,0.26,0.81,0.82,0.62,0.6,0.6,0.56,0.58,0.55,0.54,0.49,0.55,0.52,0.47,0.45,0.46,0.49,0.48,0.46,0.42,0.43,0.43,0.44,0.34,0.35,0.38,0.42,0.38,0.33,0.35,0.34,0.38,0.34,0.34,0.34,0.3,0.28,0.3,0.29,0.3,0.29,0.28,0.25,0.23,0.32,0.32,0.31,0.33,0.3,0.28,0.29,0.27,0.31,0.28,0.27,0.27,0.84,0.9,0.46,0.64,0.62,0.56,0.53,0.51,0.51,0.47,0.41,0.45,0.45,0.46,0.46,0.45,0.47,0.45,0.44,0.41,0.41,0.41,0.4,0.37,0.36,0.37,0.33,0.35,0.3,0.33,0.52,0.88,0.81,0.57,0.56,0.6,0.63,0.6,0.57,0.53,0.42,0.46,0.43,0.48,0.48,0.41,0.48,0.45,0.41,0.43,0.35,0.41,0.49,0.38,0.43,0.43,0.37,0.37,0.33,0.41,0.36,0.39,0.37,0.37,0.38,0.31,0.34,0.33,0.34,0.34,0.29,0.33,0.29,0.33,0.35,0.36,0.35,0.38,0.33,0.36,0.33,0.33,0.34,0.33,0.31,0.35,1,0.81,0.63,0.5,0.55,0.62,0.63,0.56,0.47,0.47,0.37,0.39,0.43,0.45,0.38,0.41,0.39,0.4,0.39,0.33,0.35,0.38,0.33,0.33,0.31,0.3,0.31,0.29,0.3,0.28,0.57,0.79,0.6,0.68,0.61,0.54,0.5,0.54,0.54,0.5,0.54,0.52,0.51,0.46,0.47,0.45,0.48,0.45,0.45,0.43,0.41,0.35,0.42,0.37,0.39,0.47,0.37,0.42,0.37,0.41,0.41,0.42,0.39,0.39,0.4,0.34,0.37,0.36,0.38,0.36,0.33,0.33,0.29,0.4,0.35,0.42,0.37,0.4,0.39,0.37,0.38,0.37,0.38,0.36,0.37,0.65,0.84,0.66,0.66,0.55,0.54,0.53,0.51,0.52,0.52,0.49,0.47,0.39,0.44,0.36,0.43,0.39,0.4,0.37,0.37,0.38,0.35,0.36,0.33,0.35,0.31,0.32,0.3,0.27,0.32,0.26,0.48,0.64,0.6,0.56,0.5,0.5,0.51,0.54,0.51,0.48,0.44,0.52,0.5,0.44,0.38,0.48,0.48,0.47,0.36,0.38,0.4,0.44,0.42,0.4,0.44,0.42,0.42,0.35,0.33,0.4,0.4,0.39,0.33,0.36,0.37,0.34,0.33,0.31,0.36,0.33,0.33,0.26,0.29,0.32,0.28,0.29,0.27,0.28,0.31,0.27,0.28,0.25,0.31,0.29,0.28,0.36,0.65,0.58,0.6,0.55,0.54,0.5,0.55,0.52,0.49,0.46,0.44,0.46,0.42,0.42,0.41,0.44,0.37,0.42,0.33,0.4,0.35,0.38,0.3,0.35,0.33,0.35,0.27,0.3,0.31,0.3,0.75,0.53,0.72,0.56,0.49,0.68,0.6,0.51,0.63,0.64,0.51,0.55,0.5,0.44,0.52,0.48,0.41,0.42,0.4,0.41,0.4,0.46,0.43,0.52,0.57,0.51,0.47,0.43,0.35,0.41,0.4,0.36,0.37,0.43,0.54,0.53,0.48,0.44,0.38,0.36,0.38,0.32,0.27,0.36,0.45,0.55,0.56,0.52,0.51,0.51,0.53,0.54,0.54,0.48,0.46,0.9,0.61,0.68,0.56,0.3,0.63,0.56,0.32,0.56,0.49,0.35,0.54,0.57,0.51,0.55,0.51,0.55,0.59,0.56,0.54,0.49,0.45,0.44,0.43,0.44,0.38,0.3,0.3,0.28,0.33,0.38,0.72,0.69,0.62,0.59,0.59,0.58,0.58,0.58,0.58,0.59,0.61,0.61,0.57,0.52,0.51,0.57,0.6,0.62,0.58,0.51,0.49,0.57,0.55,0.59,0.56,0.48,0.48,0.54,0.58,0.61,0.55,0.49,0.5,0.54,0.53,0.52,0.48,0.43,0.46,0.43,0.4,0.4,0.43,0.37,0.48,0.52,0.51,0.52,0.51,0.48,0.51,0.54,0.51,0.49,0.44,0.88,0.75,0.57,0.54,0.54,0.52,0.46,0.45,0.45,0.46,0.38,0.36,0.34,0.34,0.36,0.34,0.32,0.3,0.28,0.26,0.28,0.26,0.23,0.2,0.17,0.17,0.15,0.12];
+    const S1 = 0, S2 = 2.857, S3 = 8.571, S4 = 14.286, BREAK = 20, S5 = 22.857, END = 28, XF = 0.5, BAR = 2.857142857142857;
+    const tl = gsap.timeline({ paused: true });
+
+    tl.fromTo("#leak", { x: -260 }, { x: 260, duration: END, ease: "sine.inOut" }, 0);
+    const motif = document.getElementById("motif-path");
+    const mLen = motif.getTotalLength();
+    motif.setAttribute("stroke-dasharray", String(mLen));
+    tl.fromTo("#motif-path", { attr: { "stroke-dashoffset": mLen } }, { attr: { "stroke-dashoffset": 0 }, duration: 2.6, ease: "power2.inOut" }, 0.1);
+    tl.fromTo("#motif", { x: 0, y: 0 }, { x: -140, y: 20, duration: END, ease: "none" }, 0);
+    for (let f = 0; f < RMS.length && f / 30 < END; f += 2) {
+      tl.call(((v) => () => { document.getElementById("motif").style.opacity = String(0.35 + v * 0.4); })(RMS[f]), [], f / 30);
+    }
+
+    WORDS.forEach((times, i) => {
+      times.forEach((t0, j) => {
+        tl.fromTo("#w-" + i + "-" + j, { opacity: 0, y: 26, filter: "blur(12px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.28, ease: "power3.out" }, VO_AT[i] + t0);
+      });
+    });
+
+    function dissolveIn(sel, t) { tl.fromTo(sel, { opacity: 0, filter: "blur(18px)" }, { opacity: 1, filter: "blur(0px)", duration: XF, ease: "power2.out" }, t); }
+    function dissolveOut(sel, t) { tl.to(sel, { opacity: 0, filter: "blur(18px)", duration: XF, ease: "power2.in" }, t); }
+    dissolveOut("#s1", S2); dissolveIn("#s2", S2);
+    dissolveOut("#s2", S3); dissolveIn("#s3", S3);
+    dissolveOut("#s3", S4); dissolveIn("#s4", S4);
+    dissolveOut("#s4", S5); dissolveIn("#s5", S5);
+
+    tl.fromTo("#s1-kicker", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 0.2);
+
+    // s2: dictation
+    tl.fromTo("#s2-plane", { rotationX: 26, rotationY: -30, rotationZ: 4, z: -260 }, { rotationX: 14, rotationY: -14, rotationZ: 2, z: 0, duration: S3 - S2 + XF, ease: "power2.out" }, S2);
+    const level = (t) => Math.max(0, Math.min(1, 0.25 + 0.45 * Math.abs(Math.sin(t * 7.1)) * (0.6 + 0.4 * Math.sin(t * 2.3 + 1)) + 0.2 * Math.abs(Math.sin(t * 13.7))));
+    const hw = [0.35, 0.6, 0.85, 1.0, 0.7, 0.9, 0.55, 0.3];
+    const st = { p: 0 };
+    tl.to(st, { p: 1, duration: 5.3 - S2, ease: "none", onUpdate: () => {
+      const t = S2 + st.p * (5.3 - S2);
+      hw.forEach((w, i) => { document.getElementById("hb-" + i).style.height = (8 + level(t) * 44 * w) + "px"; });
+    } }, S2);
+    tl.set("#s2-bars", { display: "flex" }, 0); tl.set("#s2-spin", { display: "none" }, 0); tl.set("#s2-check", { display: "none" }, 0); tl.set("#s2-label", { textContent: "Listening" }, 0);
+    tl.set("#s2-bars", { display: "none" }, 5.3); tl.set("#s2-spin", { display: "block" }, 5.3); tl.set("#s2-label", { textContent: "Transcribing…" }, 5.3);
+    tl.fromTo("#s2-spin", { rotation: 0 }, { rotation: 360, duration: 0.5, ease: "none" }, 5.3);
+    tl.set("#s2-spin", { display: "none" }, 5.8); tl.set("#s2-check", { display: "flex" }, 5.8); tl.set("#s2-label", { textContent: "Inserted" }, 5.8);
+    tl.to("#s2-ph", { opacity: 0, duration: 0.1 }, 5.8);
+    tl.fromTo("#s2-text", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.35, ease: "power3.out" }, 5.8);
+
+    // s3: meeting
+    tl.fromTo("#s3-notch", { opacity: 0, y: -30 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, S3 + 0.1);
+    const nt = { p: 0 };
+    tl.to(nt, { p: 1, duration: S4 - S3, ease: "none", onUpdate: () => {
+      const t = S3 + nt.p * (S4 - S3);
+      document.getElementById("s3-timer").textContent = "14:0" + Math.min(9, Math.floor(t - S3));
+      const you = Math.max(0, level(t * 1.3) - 0.35) * 1.4, oth = level(t + 5);
+      [0.45, 0.8, 1.0, 0.7, 0.4].forEach((k, i) => {
+        document.getElementById("ty-" + i).style.height = (8 + you * 30 * k) + "px";
+        document.getElementById("to-" + i).style.height = (8 + oth * 30 * k) + "px";
+      });
+    } }, S3);
+    tl.fromTo("#s3-plane", { rotationX: 30, rotationY: 34, rotationZ: -3, z: -420, opacity: 0 }, { rotationX: 12, rotationY: 12, rotationZ: -1, z: 0, opacity: 1, duration: 1.4, ease: "power3.out" }, S3 + 0.4);
+    tl.to("#s3-plane", { rotationY: 4, duration: S4 - S3 - 1.8, ease: "sine.inOut" }, S3 + 1.8);
+    tl.fromTo("#hl-1", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 11.429);
+    tl.fromTo("#hl-2", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 12.143285714285714);
+
+    // s4: each platform lands as it is named, the plane drifts in depth
+    tl.fromTo("#s4-plane", { rotationX: 18, rotationY: -22, z: -200 }, { rotationX: 8, rotationY: 10, z: 60, duration: BREAK - S4 + 0.6, ease: "sine.inOut" }, S4);
+    PLAT_AT.forEach((t, i) => {
+      tl.fromTo("#plat-" + i, { opacity: 0, z: 420, filter: "blur(16px)" }, { opacity: 1, z: 0, filter: "blur(0px)", duration: 0.45, ease: "expo.out" }, t - 0.05);
+    });
+    // memory line: the platforms clear as the music drops and the line fills the frame
+    tl.to("#s4-stage", { opacity: 0, filter: "blur(18px)", scale: 0.94, duration: 0.6, ease: "power2.in" }, BREAK - 0.2);
+    tl.to("#cap-3", { opacity: 0, y: -30, filter: "blur(10px)", duration: 0.45, ease: "power2.in" }, BREAK - 0.2);
+
+    // s5: outro
+    const wave = document.getElementById("s5-wave");
+    const wLen = wave.getTotalLength();
+    wave.setAttribute("stroke-dasharray", String(wLen));
+    tl.fromTo("#s5-wave", { attr: { "stroke-dashoffset": wLen } }, { attr: { "stroke-dashoffset": 0 }, duration: 0.9, ease: "power2.inOut" }, S5 + 0.1);
+    tl.fromTo("#s5-bar", { opacity: 0 }, { opacity: 1, duration: 0.2 }, S5 + 0.9);
+    tl.fromTo("#s5-word", { opacity: 0, y: 30, filter: "blur(10px)" }, { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.6, ease: "power3.out" }, S5 + 0.4);
+    tl.fromTo("#s5-meta", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, 25.714);
+
+    window.__timelines["main"] = tl;
+  </script>
+</body>
+</html>

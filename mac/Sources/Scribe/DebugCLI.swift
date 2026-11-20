@@ -66,6 +66,7 @@ enum DebugCLI {
     runRecorderPreviewIfRequested()
     runScreenResumeTestIfRequested()
     runRenderDashboardIfRequested()
+    DiarizeBench.runIfRequested()
     runMeetingProcessIfRequested()
     runSummaryTestIfRequested()
     runAppleTurnsIfRequested()

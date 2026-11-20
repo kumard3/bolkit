@@ -1,0 +1,1 @@
+Bolkit now tells you who said what in a meeting, on Zoom or around one table. It names people when they introduce themselves, and an 11-minute call is sorted by speaker in about 3 minutes, all on your Mac.
